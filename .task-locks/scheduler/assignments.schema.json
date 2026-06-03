@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://nova25/task-locks/scheduler/assignments.schema.json",
+  "$comment": "schema_version=1.0.0 | Added 2026-06-03 | Scheduler Layer. Format for scheduler/assignments.json.",
+  "title": "NOVA 2.5 Scheduler Assignments",
+  "description": "Recommended agent-to-task mappings produced by scheduler.mjs. Advisory only — no lease is acquired here. Agents consult this file before calling lease-manager.mjs acquire.",
+  "type": "object",
+  "required": ["schema_version", "scheduler_sequence", "generated_at", "assignments"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version":       { "type": "string", "const": "1.0.0" },
+    "scheduler_sequence":   { "type": "integer", "minimum": 0 },
+    "registry_event_count": { "type": "integer", "minimum": 0 },
+    "generated_at":         { "type": "string", "format": "date-time" },
+    "assignments": {
+      "type": "array",
+      "description": "One entry per schedulable task, ordered by score descending.",
+      "items": { "$ref": "#/definitions/assignment" }
+    }
+  },
+  "definitions": {
+    "assignment": {
+      "type": "object",
+      "required": ["task_id", "needed_role", "score", "recommended_agent", "fallback_candidates"],
+      "additionalProperties": false,
+      "properties": {
+        "task_id":          { "type": "string", "pattern": "^TASK-[0-9]{4,}(-[a-z])?$" },
+        "needed_role":      { "type": "string", "enum": ["IMPLEMENTATION", "REVIEW"] },
+        "score":            { "type": "number" },
+        "recommended_agent": {
+          "type": ["string", "null"],
+          "description": "Best-fit agent_id. Null if no capable agent is available."
+        },
+        "recommended_fit_score": {
+          "type": ["number", "null"],
+          "minimum": 0, "maximum": 1,
+          "description": "fit_score of the recommended_agent. Null if no candidate."
+        },
+        "fallback_candidates": {
+          "type": "array",
+          "description": "Remaining ranked candidates to use if recommended_agent is unavailable.",
+          "items": {
+            "type": "object",
+            "required": ["agent_id", "fit_score"],
+            "additionalProperties": false,
+            "properties": {
+              "agent_id":  { "type": "string" },
+              "fit_score": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

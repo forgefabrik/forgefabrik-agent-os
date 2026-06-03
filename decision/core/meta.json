@@ -1,0 +1,33 @@
+{
+  "schema_version": "2.0",
+  "last_ref": "2026-06-03|03:20:34",
+  "migrated_from": "docs/TALK2AI/",
+  "migrated_at": "2026-06-10T00:00:00Z",
+  "threads": {
+    "Axiom Boundary — Validator Zweiklassen-Urteilssystem": {
+      "last_user": "2026-06-01|00:00:00",
+      "last_ai": null,
+      "count": 1
+    },
+    "Axiom Boundary — UNRESOLVED + TASK-GOV-0002": {
+      "last_user": "2026-06-03|02:34:26",
+      "last_ai": null,
+      "count": 1
+    },
+    "talk": {
+      "last_user": "2026-06-03|02:04:50",
+      "last_ai": null,
+      "count": 1
+    },
+    "MULTI-AGENT CONTROL SYSTEM (FINAL DESIGN)": {
+      "last_user": "2026-06-03|02:39:33",
+      "last_ai": null,
+      "count": 1
+    },
+    "# COMM PROJECTION ENGINE — FINAL BUILD CONTRACT": {
+      "last_user": null,
+      "last_ai": "2026-06-03|03:20:34",
+      "count": 1
+    }
+  }
+}

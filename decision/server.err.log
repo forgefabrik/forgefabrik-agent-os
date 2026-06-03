@@ -1,0 +1,6 @@
+INFO:     Started server process [58560]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+ERROR:    [Errno 10048] error while attempting to bind on address ('127.0.0.1', 7337): [winerror 10048] normalerweise darf jede socketadresse (protokoll, netzwerkadresse oder anschluss) nur jeweils einmal verwendet werden
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.

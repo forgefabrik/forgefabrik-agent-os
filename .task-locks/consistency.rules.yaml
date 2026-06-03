@@ -1,0 +1,470 @@
+# NOVA 2.5 — Consistency Contract
+#
+# schema_version: 1.0.0
+# updated: 2026-06-03
+#
+# This file is the SINGLE SOURCE OF TRUTH for inter-layer consistency rules.
+# It governs how the three authoritative layers resolve conflicts when they
+# diverge.  Extend ONLY via Architect RFC; never inline these rules in code.
+#
+# Checker:  .task-locks/consistency-checker.mjs  — read-only (detect/classify/recommend)
+# Enforcer: .task-locks/repair-manager.mjs        — write actor (apply corrections)
+#
+# The checker MUST NOT write.  The enforcer MUST NOT classify.
+# This separation prevents the checker from validating its own changes.
+#
+# ---------------------------------------------------------------------------
+# LAYER PRIORITY
+#
+# When two layers disagree, the higher-priority layer wins unconditionally.
+#
+# P1  EVENT_LOG      TASK_EVENTS.jsonl
+#       Append-only, hash-chained, never overridden.
+#       All other layers are derived from or consistent with P1.
+#
+# P2  TASK_REGISTRY  .task-locks/registry.json
+#       Derived from P1 via replayer.mjs.  Wins over agent runtime state.
+#
+# P3  LEASE_STORE    .task-locks/agents/leases.json
+#       Derived from P1/P2 via lease-manager.mjs.  Loses to both P1 and P2.
+#
+# EPHEMERAL (not a layer):
+#   LIVE_HEARTBEAT
+#     Agent heartbeat signals are ephemeral evidence only.
+#     They may prove: agent_seen_recently = true.
+#     They may NOT prove: lease_valid = true, task_state = X.
+#     A fresh heartbeat NEVER overrides a P1/P2/P3 contradiction.
+#     Heartbeats affect only last_seen_at in heartbeat files.
+# ---------------------------------------------------------------------------
+
+schema_version: "1.0.0"
+updated: "2026-06-03"
+
+priority:
+  1:
+    id: EVENT_LOG
+    path: "TASK_EVENTS.jsonl"
+    description: "Append-only hash-chained event log. Never overridden."
+  2:
+    id: TASK_REGISTRY
+    path: ".task-locks/registry.json"
+    description: "Task state projection. Derived from P1 via replayer.mjs."
+  3:
+    id: LEASE_STORE
+    path: ".task-locks/agents/leases.json"
+    description: "Active lease cache. Derived from P1/P2 via lease-manager.mjs."
+
+ephemeral:
+  LIVE_HEARTBEAT:
+    description: >
+      Ephemeral evidence that an agent was seen recently.
+      May set last_seen_at = true. May NOT override P1/P2/P3 state.
+      A fresh heartbeat is insufficient to prove a lease is valid if P1/P2/P3 say otherwise.
+    proves: [ "agent_seen_recently" ]
+    does_not_prove: [ "lease_valid", "task_state", "lock_held" ]
+
+# ---------------------------------------------------------------------------
+# CONSISTENCY STATES
+#
+# Severity order (worst → best):
+#   CORRUPT > INVALID > DEGRADED > DRIFTED > STALE > CONSISTENT
+#
+# The overall status of a consistency check is the worst state across all
+# applied rules.
+# ---------------------------------------------------------------------------
+
+states:
+  CONSISTENT:
+    severity: 0
+    description: >
+      All three layers agree.  Derived projections equal what full event replay
+      would produce.  No rules triggered.
+    blocking: false
+
+  STALE:
+    severity: 1
+    description: >
+      Agent runtime (P3) is behind P1/P2 by at most rebuild_lag_threshold_seconds.
+      This is normal Eventually-Consistent lag after recent writes.
+      Auto-rebuild is sufficient; system remains operational.
+    blocking: false
+
+  DRIFTED:
+    severity: 2
+    description: >
+      Agent runtime (P3) lag exceeds drift_lag_threshold_seconds but event chain
+      (P1) is intact.  System is operational but stale enough to risk incorrect
+      gate decisions.  Rebuild should be triggered before new lease operations.
+    blocking: false  # non-blocking but flagged
+
+  DEGRADED:
+    severity: 3
+    description: >
+      System is functional and P1 integrity is intact, but trust quality is
+      reduced.  Examples: axiom_density above axiom_density_warn_threshold,
+      no snapshot taken recently, or trust-report.json status = degraded.
+      System may continue operating but downstream consumers should display a
+      warning and Architect should review.
+    blocking: false
+
+  INVALID:
+    severity: 4
+    description: >
+      A layer contradicts a higher-priority layer.  Repair-manager.mjs must
+      apply the prescribed correction before new lease operations are accepted.
+      consistency-checker.mjs will not block operations itself; the API gate
+      (agents.py) must poll the checker before accepting acquire/renew requests.
+    blocking: true  # API gate should reject acquire/renew until repaired
+
+  CORRUPT:
+    severity: 5
+    description: >
+      P1 (TASK_EVENTS.jsonl) hash chain is broken.  This is a critical failure.
+      No layer can be trusted.  Full stop — no lease operations permitted.
+      Requires manual Architect intervention and audit.mjs forensics.
+    blocking: true
+
+# ---------------------------------------------------------------------------
+# CONSISTENCY RULES
+#
+# Each rule specifies:
+#   id          — machine-readable identifier (R1-R8)
+#   name        — human-readable short label
+#   trigger     — conditions (evaluated by consistency-checker.mjs)
+#   result      — state classification when trigger fires
+#   recommendation — what repair-manager.mjs should do (not the checker)
+#
+# IMPORTANT: recommendations are instructions to repair-manager.mjs.
+# consistency-checker.mjs MUST NOT act on them.
+# ---------------------------------------------------------------------------
+
+rules:
+
+  - id: R1
+    name: lease_active_task_terminal
+    description: >
+      An ACTIVE lease exists in P3 (leases.json) for a task whose P2 status
+      (registry.json) is MERGED or EXPIRED.  The task's lifecycle ended in P1;
+      the lease must be expired.
+    trigger:
+      lease_status: ACTIVE
+      task_status_in_registry: [ MERGED, EXPIRED ]
+    result: INVALID
+    recommendation:
+      action: expire_lease
+      emit_event: LEASE_EXPIRED
+      notes_template: "consistency_rule=R1 task_terminal_status={task_status}"
+
+  - id: R2
+    name: lease_expired_event_not_synced
+    description: >
+      A LEASE_EXPIRED event exists in P1 (event log) referencing a lease_id
+      that is still ACTIVE in P3 (leases.json).  P1 wins; P3 must be synced.
+    trigger:
+      event_type_in_log: LEASE_EXPIRED
+      matching_lease_status: ACTIVE
+    result: INVALID
+    recommendation:
+      action: sync_lease_status_to_expired
+      emit_event: false  # event already in P1; no new event needed
+      notes_template: "consistency_rule=R2 source=P1_event_not_synced_to_P3"
+
+  - id: R3
+    name: duplicate_active_slot
+    description: >
+      Two or more ACTIVE leases exist in P3 for the same (task_id, role_category)
+      pair.  Violates the FCFS contract.  Resolution: expire the lease with the
+      LOWER claim_event_index (older claim in P1 terms).
+    trigger:
+      duplicate_active_leases_same_slot: true
+    result: INVALID
+    recommendation:
+      action: expire_older_lease
+      conflict_resolution: lower_claim_event_index  # deterministic — no wall-clock
+      emit_event: LEASE_EXPIRED
+      notes_template: "consistency_rule=R3 conflict_resolution=lower_claim_event_index"
+
+  - id: R4
+    name: invalid_review_lease
+    description: >
+      An ACTIVE review_lock lease exists in P3, but the three-part review gate
+      (task_runtime_state.schema.json) evaluates to review_legal=false at the
+      current moment.  Gate conditions changed after the lease was acquired
+      (e.g., snapshot was rolled back, implementation lock expired).
+    trigger:
+      lease_role_category: review_lock
+      lease_status: ACTIVE
+      review_legal: false
+    result: INVALID
+    recommendation:
+      action: expire_lease
+      emit_event: LEASE_EXPIRED
+      notes_template: "consistency_rule=R4 gate_invalidated_after_acquire"
+
+  - id: R5
+    name: agent_registry_stale
+    description: >
+      agents/registry.json event_count is behind TASK_EVENTS.jsonl line count
+      by more than rebuild_lag_threshold_seconds (time proxy via event frequency
+      estimate or wall-clock of last write).  Non-blocking.
+    trigger:
+      agent_registry_behind_event_log: true
+      lag_type: registry
+    result: STALE
+    recommendation:
+      action: rebuild_agent_registry
+      command: "node .task-locks/agent-runtime.mjs rebuild"
+      blocking: false
+
+  - id: R6
+    name: lease_store_stale
+    description: >
+      leases.json was last written more than rebuild_lag_threshold_seconds ago
+      and the event log has grown since then.  There may be missed LEASE_EXPIRED
+      or TASK_RELEASED events.  Non-blocking; run expire-check.
+    trigger:
+      lease_store_age_seconds: "> rebuild_lag_threshold_seconds"
+    result: STALE
+    recommendation:
+      action: run_expire_check
+      command: "node .task-locks/lease-manager.mjs expire"
+      blocking: false
+
+  - id: R7
+    name: lease_expiry_warning
+    description: >
+      An ACTIVE lease whose expires_at is within warning_window_seconds from
+      the current timestamp.  The owning agent should renew or release.
+      Non-blocking; informational only.
+    trigger:
+      lease_status: ACTIVE
+      time_to_expiry_seconds: "< warning_window_seconds"
+    result: CONSISTENT  # still technically consistent; severity 0
+    recommendation:
+      action: notify_agent
+      blocking: false
+
+  - id: R8
+    name: agent_heartbeat_ttl_expired
+    description: >
+      An ACTIVE lease exists in P3, but the agent's heartbeat file in
+      agents/heartbeats/<agent_id>.json shows last_seen_at older than
+      heartbeat_stale_threshold_seconds.  The agent is effectively absent.
+      This is DISTINCT from lease expiry (R1/expires_at):
+        - Lease expiry = expires_at crossed
+        - Agent absence = heartbeat TTL crossed regardless of expires_at
+      An absent agent cannot renew or use its lease; repair-manager must expire it.
+    trigger:
+      lease_status: ACTIVE
+      agent_heartbeat_age_seconds: "> heartbeat_stale_threshold_seconds"
+    result: INVALID
+    recommendation:
+      action: expire_lease
+      emit_event: LEASE_EXPIRED
+      notes_template: "consistency_rule=R8 agent_absent_since={last_seen_at}"
+
+# ---------------------------------------------------------------------------
+# VALID-DESPITE-DRIFT CONDITIONS (TOLERATED)
+#
+# These conditions look like drift but are intentional and expected.
+# consistency-checker.mjs must suppress violation reporting when
+# a tolerated condition is detected.
+# ---------------------------------------------------------------------------
+
+tolerated_conditions:
+
+  T1:
+    name: registry_rebuild_lag
+    description: >
+      ACTIVE lease exists in P3 for a task_id not yet present in P2
+      (registry.json).  This is expected when:
+        1. TASK_CLAIMED event was just written to P1 (event-writer.mjs succeeded)
+        2. replayer.mjs has not yet rebuilt P2
+      The lease is valid because P1 guarantees it.  Tolerated only within
+      within_ttl_window_seconds of the lease acquired_at timestamp.
+    condition:
+      lease_status: ACTIVE
+      task_in_registry: false
+      lease_age_seconds: "<= within_ttl_window_seconds"
+    suppresses: [ R1 ]  # R1 cannot fire if task is not in registry at all
+
+  T2:
+    name: agent_registry_small_lag
+    description: >
+      agents/registry.json has fewer agents than AGENT_REGISTERED events in P1,
+      but the difference is at most agent_registry_small_lag_max agents.
+      This is normal rebuild lag for low-frequency registrations.
+    condition:
+      unregistered_agent_count: "<= agent_registry_small_lag_max"
+    suppresses: [ R5 ]
+
+# ---------------------------------------------------------------------------
+# DEGRADED TRIGGERS (quality / trust reduction)
+#
+# These do not indicate data corruption.  They indicate that the system's
+# proof quality or trust level has declined below a meaningful threshold.
+# Result: DEGRADED.
+# ---------------------------------------------------------------------------
+
+degraded_conditions:
+
+  D1:
+    name: axiom_density_high
+    description: >
+      The fraction of TASK_ARCHITECT_OVERRIDE events relative to all task-state
+      events exceeds axiom_density_warn_threshold.  A high axiom density means
+      the event log relies heavily on manual overrides rather than deterministic
+      state transitions.  The log remains valid, but its deterministic proof
+      value is reduced.
+    trigger:
+      axiom_density: "> axiom_density_warn_threshold"
+    result: DEGRADED
+    recommendation:
+      action: notify_architect
+      blocking: false
+
+  D2:
+    name: snapshot_age_high
+    description: >
+      The most recent snapshot is older than snapshot_age_warn_seconds.
+      Rollback range is large; recovery after corruption is more expensive.
+    trigger:
+      latest_snapshot_age_seconds: "> snapshot_age_warn_seconds"
+    result: DEGRADED
+    recommendation:
+      action: suggest_snapshot
+      command: "node .task-locks/snapshot-writer.mjs"
+      blocking: false
+
+  D3:
+    name: trust_report_degraded
+    description: >
+      trust-report.json status field equals "degraded" (from trust-report.mjs).
+      This means one or more trust checks passed with warnings (e.g., snapshot_0
+      genesis anchor missing).  System is functional; trust is reduced.
+    trigger:
+      trust_report_status: "degraded"
+    result: DEGRADED
+    recommendation:
+      action: inspect_trust_report
+      blocking: false
+
+# ---------------------------------------------------------------------------
+# PARAMETERS
+#
+# All time thresholds are in seconds unless noted.
+# Change these only via Architect RFC — they affect API gate behaviour.
+# ---------------------------------------------------------------------------
+
+parameters:
+  rebuild_lag_threshold_seconds: 300      # STALE fires when lag > 5 min
+  drift_lag_threshold_seconds:   1800     # DRIFTED fires when lag > 30 min
+  warning_window_seconds:        1800     # R7 warns 30 min before lease expiry
+  within_ttl_window_seconds:     300      # T1 tolerance window (5 min)
+  heartbeat_stale_threshold_seconds: 21600  # R8 fires after 6 h no heartbeat (= IMPLEMENTATION TTL)
+  agent_registry_small_lag_max:  10       # T2: up to 10 unregistered agents is fine
+  axiom_density_warn_threshold:  0.05     # D1: warn above 5% axiom events
+  snapshot_age_warn_seconds:     86400    # D2: warn if no snapshot in 24 h
+
+# ---------------------------------------------------------------------------
+# GOVERNANCE METRICS
+#
+# These measure HOW OFTEN the system needs intervention, not just WHETHER
+# it is currently consistent.  A system can pass every rule check and still
+# be operationally broken if it is being permanently repaired.
+#
+# Analogy to axiom_density:
+#   axiom_density   → how often does a human override a deterministic transition?
+#   lease_expiry_rate   → how often do agents fail to complete work within TTL?
+#   repair_frequency    → how often does the system need external correction?
+#   drift_density       → how often is the system in a non-CONSISTENT state?
+#
+# These metrics are NOT evaluated by consistency-checker.mjs (it is read-only
+# and event-scoped).  They are computed by a dedicated metrics collector
+# (future: scheduler/metrics.mjs) over a sliding time window.
+#
+# Severity: DEGRADED when warning threshold crossed; INVALID not applicable.
+# ---------------------------------------------------------------------------
+
+governance_metrics:
+
+  lease_expiry_rate:
+    description: >
+      Fraction of leases that terminated via LEASE_EXPIRED vs total leases
+      acquired (TASK_CLAIMED).  A high rate means agents consistently fail
+      to complete work within TTL — structural, not transient.
+    formula: "count(LEASE_EXPIRED) / count(TASK_CLAIMED)"
+    window: "sliding_24h"
+    warning_threshold:  0.05   # 5%  → DEGRADED
+    critical_threshold: 0.20   # 20% → INVALID (suggests systemic agent failure)
+    unit: fraction
+
+  repair_frequency:
+    description: >
+      Number of times repair-manager.mjs applied at least one correction per
+      rolling 24-hour window.  High frequency means the system is formally
+      consistent only because it is continuously repaired — the invariants
+      are not being maintained organically.
+    formula: "count(repair_manager_runs_with_applied > 0)"
+    window: "rolling_24h"
+    warning_threshold:  10    # runs/day → DEGRADED
+    critical_threshold: 100   # runs/day → INVALID (repair loop)
+    unit: count_per_day
+
+  registry_rebuild_frequency:
+    description: >
+      Number of times agent-runtime.mjs rebuild was triggered per day.
+      High frequency suggests high agent churn, very short lease cycles, or
+      memory-less agents re-registering repeatedly.
+    formula: "count(agent-runtime rebuild calls)"
+    window: "rolling_24h"
+    warning_threshold: 20    # per day → DEGRADED
+    unit: count_per_day
+
+  drift_density:
+    description: >
+      Fraction of consistency-checker.mjs runs that returned DRIFTED or worse
+      (DRIFTED + DEGRADED + INVALID + CORRUPT) over a sliding window.
+      Analogous to axiom_density for the agent runtime layer:
+        axiom_density  = how deterministic is the event log?
+        drift_density  = how often is the runtime in a stable state?
+      A system with drift_density > critical_threshold is one that spends
+      more time inconsistent than consistent — a multi-agent OS smell.
+    formula: "count(status >= DRIFTED) / count(total_checks)"
+    window: "sliding_24h"
+    warning_threshold:  0.01   # 1%  → DEGRADED
+    critical_threshold: 0.10   # 10% → INVALID
+    unit: fraction
+
+  note: >
+    These thresholds are initial estimates based on the system design.
+    They must be calibrated against real operational data after the
+    Scheduler Layer is operational.  Do not lower thresholds without
+    measuring baseline drift_density on a stable system first.
+
+# ---------------------------------------------------------------------------
+# CHECKER CONTRACT
+#
+# These constraints are enforced by code review, not by the checker itself.
+# ---------------------------------------------------------------------------
+
+checker_contract:
+  read_only: true
+  may_write: []
+  may_read:
+    - "TASK_EVENTS.jsonl"
+    - ".task-locks/registry.json"
+    - ".task-locks/agents/leases.json"
+    - ".task-locks/agents/registry.json"
+    - ".task-locks/agents/heartbeats/*.json"
+    - ".task-locks/agents/task_runtime_state.schema.json"
+    - "docs/communication/core/trust-report.json"
+  outputs: [ "consistency_report" ]  # printed to stdout only; never written to disk
+  side_effects: none
+
+repair_manager_contract:
+  reads: [ "consistency_report" ]   # output of consistency-checker.mjs
+  writes:
+    - ".task-locks/agents/leases.json"  # via lease-manager.mjs
+  emits_events_via: "event-writer.mjs"  # never writes TASK_EVENTS.jsonl directly
+  does_not_classify: true               # classification is checker's job

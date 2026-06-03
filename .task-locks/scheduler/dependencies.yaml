@@ -1,0 +1,38 @@
+# NOVA 2.5 Scheduler — Task Dependency Graph (V1)
+#
+# This file declares explicit task dependencies for the scheduler.
+# Dependency pressure: a task with many dependents gets a higher score.
+#
+# Rule:
+#   depends_on lists the task IDs that MUST reach MERGED state before
+#   this task can be meaningfully started.
+#
+# History describes "what happened".
+# Dependencies describe "what must happen".
+# These are different things — do not derive dependencies from event history.
+#
+# Format:
+#   <task_id>:
+#     depends_on:
+#       - <task_id>
+#       - <task_id>
+#
+# V1: static. V2 will use TASK_DEPENDENCY_ADDED / TASK_DEPENDENCY_REMOVED events.
+#
+# Example (commented out — add real dependencies here):
+#
+#   TASK-0002:
+#     depends_on:
+#       - TASK-0001
+#
+#   TASK-0004:
+#     depends_on:
+#       - TASK-0002
+#       - TASK-0003
+#
+# Empty by default — all tasks are independent until declared otherwise.
+
+version: "1.0.0"
+updated: "2026-06-03"
+
+dependencies: {}

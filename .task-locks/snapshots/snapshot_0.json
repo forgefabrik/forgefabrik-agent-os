@@ -1,0 +1,436 @@
+{
+  "snapshot_version": 1,
+  "projection_version": 1,
+  "snapshot_index": 0,
+  "event_index": 0,
+  "event_hash": "efbfb3c46538ae6b1c228e3dcd3d5694edfc6be447a641aaa6f2eb7c8a77ec3a",
+  "genesis_hash": "1eb7528ebb64a57fb9b8b567bc9b613911aa3c213e7aaf731ce3fbdc77584eb1",
+  "registry": {
+    "schema_version": 1,
+    "engine_version": 1,
+    "generated_at": "2026-06-02T00:00:00Z",
+    "event_count": 1,
+    "tasks": [
+      {
+        "task_id": "TASK-0001",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0002",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0003",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0004",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0005",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0006",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0007",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0008",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0009",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0010",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0011",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0012",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0013",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0014",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0015",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0016",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0017",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0018",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0019",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0020",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0021",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0022",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0023",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0024",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0025",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0026",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0027",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0028",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0029",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0030",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0031",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0032",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0033",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0034",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0035",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0036",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0037",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0038",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0039",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0040",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0041",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      },
+      {
+        "task_id": "TASK-0042",
+        "status": "TODO",
+        "implementation_lock": null,
+        "review_lock": null,
+        "forked_from": null,
+        "fork_suffix": null,
+        "pr_number": null,
+        "last_event_index": 0
+      }
+    ]
+  }
+}

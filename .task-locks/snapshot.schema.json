@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://nova25/task-locks/snapshot.schema.json",
+  "$comment": "schema_version=1.0.0 | Frozen 2026-06-03 | Format for .task-locks/snapshots/snapshot_N.json. The genesis_hash field is a verified constant: SHA-256(JSON.stringify(sortedKeys(genesis.json))) = 1eb7528ebb64a57fb9b8b567bc9b613911aa3c213e7aaf731ce3fbdc77584eb1",
+  "title": "NOVA 2.5 Registry Snapshot",
+  "description": "A point-in-time checkpoint of the full registry state at a given event_index. Produced by snapshot-writer.mjs. Referenced by SNAPSHOT_CREATED events in TASK_EVENTS.jsonl.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "snapshot_version",
+    "projection_version",
+    "snapshot_index",
+    "event_index",
+    "event_hash",
+    "genesis_hash",
+    "registry"
+  ],
+  "properties": {
+    "snapshot_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version of this snapshot file format. Increment on breaking changes to the snapshot format."
+    },
+    "projection_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Version of the projection algorithm that produced the registry field. Must match engine_version in transitions.yaml at the time of snapshot."
+    },
+    "snapshot_index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Zero-based index N. Matches the filename snapshot_N.json and the snapshot_index field in the corresponding SNAPSHOT_CREATED event."
+    },
+    "event_index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The event_index of the last event consumed to produce this snapshot. The snapshot represents the state of the registry AFTER this event was applied."
+    },
+    "event_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "The event_hash of the event at event_index. Allows the audit tool to verify this snapshot references a real, unmodified event."
+    },
+    "genesis_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "Constant: SHA-256(JSON.stringify(sortedKeys(.task-locks/genesis.json))). Value: 1eb7528ebb64a57fb9b8b567bc9b613911aa3c213e7aaf731ce3fbdc77584eb1. Allows detecting genesis.json tampering from any snapshot file."
+    },
+    "registry": {
+      "type": "object",
+      "description": "Full contents of .task-locks/registry.json at event_index. Shape defined by registry.schema.json.",
+      "required": ["schema_version", "engine_version", "generated_at", "event_count", "tasks"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version":  { "type": "integer" },
+        "engine_version":  { "type": "integer" },
+        "generated_at":    { "type": "string",  "format": "date-time" },
+        "event_count":     { "type": "integer", "minimum": 0 },
+        "tasks":           { "type": "array",   "items": { "type": "object" } }
+      }
+    }
+  }
+}

@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>COI | Cybernetic Operations Interface</title>
+  <link rel="stylesheet" href="/ui/coi.css">
+</head>
+<body>
+  <div class="coi-shell">
+    <header class="app-header">
+      <div class="brand-block">
+        <p class="eyebrow">EVENT-OS CORE</p>
+        <h1>Cybernetic Operations Interface</h1>
+        <p class="topline">Decision fabric, mailbox memory, idea compilation, and TAP control in one operator surface.</p>
+      </div>
+
+      <div class="header-actions">
+        <button class="header-button" id="readPageButton" type="button">Read View</button>
+        <button class="header-button" id="stopReadButton" type="button">Stop Voice</button>
+        <button class="header-button primary" id="refreshButton" type="button">Sync</button>
+      </div>
+
+      <div class="status-rack" aria-label="System status">
+        <span class="status-pill" id="sseStatus">SSE: CONNECTING</span>
+        <span class="status-pill" id="trustStatus">TRUST: UNKNOWN</span>
+        <span class="status-pill" id="headStatus">HEAD: --</span>
+      </div>
+    </header>
+
+    <section class="overview-strip" aria-label="System overview">
+      <div><span>Tasks</span><strong id="taskCount">--</strong></div>
+      <div><span>Queued</span><strong id="queueCount">--</strong></div>
+      <div><span>Agents</span><strong id="agentCount">--</strong></div>
+      <div><span>Leases</span><strong id="leaseCount">--</strong></div>
+      <div><span>Mailbox</span><strong id="mailCount">--</strong></div>
+      <div><span>Threads</span><strong id="threadCount">--</strong></div>
+    </section>
+
+    <nav class="coi-nav" aria-label="Control plane sections" role="tablist">
+      <button class="nav-tab active" type="button" data-tab="mailbox" role="tab" aria-selected="true" aria-controls="tab-mailbox">Mailbox</button>
+      <button class="nav-tab" type="button" data-tab="decisions" role="tab" aria-selected="false" aria-controls="tab-decisions">Decision Stream</button>
+      <button class="nav-tab" type="button" data-tab="ideas" role="tab" aria-selected="false" aria-controls="tab-ideas">Idea Factory</button>
+      <button class="nav-tab" type="button" data-tab="state" role="tab" aria-selected="false" aria-controls="tab-state">State</button>
+      <button class="nav-tab" type="button" data-tab="tap" role="tab" aria-selected="false" aria-controls="tab-tap">TAP Console</button>
+    </nav>
+
+    <main class="coi-workspace">
+      <section class="tab-view active" id="tab-mailbox" data-tab-view="mailbox" role="tabpanel">
+        <section class="panel mailbox-panel" aria-labelledby="mailboxTitle">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">APPEND-ONLY MEMORY</p>
+              <h2 id="mailboxTitle">Mailbox Timeline</h2>
+            </div>
+            <div class="mail-tools">
+              <input id="mailSearch" type="search" placeholder="Search topic or text">
+              <button class="icon-button" id="readThreadButton" type="button">Read Thread</button>
+            </div>
+          </div>
+
+          <div class="mailbox-layout">
+            <aside class="thread-sidebar" aria-label="Mailbox threads">
+              <div class="sidebar-title">Topics</div>
+              <div class="thread-list" id="threadList"></div>
+            </aside>
+
+            <section class="mail-thread" aria-label="Selected thread">
+              <div class="thread-heading">
+                <div>
+                  <p class="eyebrow">CURRENT THREAD</p>
+                  <h3 id="activeThreadTitle">All Messages</h3>
+                </div>
+                <span id="activeThreadMeta">--</span>
+              </div>
+              <div class="message-list" id="messageList" aria-live="polite"></div>
+            </section>
+
+            <aside class="mail-compose" aria-label="Mailbox composer">
+              <div>
+                <p class="eyebrow">EXCHANGE</p>
+                <h3>Long Text Composer</h3>
+              </div>
+              <label>
+                Topic
+                <input id="mailTopic" type="text" placeholder="architecture / roadmap / agent-memory">
+              </label>
+              <label>
+                Target Agent Role
+                <select id="mailAgentRole">
+                  <option value="unassigned">Unassigned / General</option>
+                  <option value="IMPLEMENTATION">Implementation</option>
+                  <option value="REFACTOR">Refactor</option>
+                  <option value="REVIEW">Review</option>
+                  <option value="ARCHITECT">Architect</option>
+                  <option value="system">System</option>
+                </select>
+              </label>
+              <label>
+                Text
+                <textarea id="mailText" rows="12" placeholder="Paste long context for the AI or paste an AI reply back to yourself. Every entry is saved with timestamp and topic so the system knows what happened and when."></textarea>
+              </label>
+              <div class="compose-actions">
+                <button id="saveAiMailButton" type="button">Save AI Reply To Me</button>
+                <button id="saveUserMailButton" type="button">Save Context For AI</button>
+              </div>
+              <div class="reader-card">
+                <strong>Voice Reader</strong>
+                <small id="readerStatus">Ready. Select a message or read the active thread.</small>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </section>
+
+      <section class="tab-view" id="tab-decisions" data-tab-view="decisions" role="tabpanel">
+        <section class="panel stream-panel" aria-labelledby="decisionStreamTitle">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">REAL-TIME EVENT FABRIC</p>
+              <h2 id="decisionStreamTitle">Decision Stream</h2>
+            </div>
+          </div>
+          <div class="timeline" id="decisionStream" aria-live="polite"></div>
+        </section>
+
+        <section class="panel tactics-panel" aria-labelledby="tacticsTitle">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">CONTROL</p>
+              <h2 id="tacticsTitle">Tactics + Queue</h2>
+            </div>
+          </div>
+          <div class="tactics-stack">
+            <button class="action-button" data-command="force propose scheduler cycle" type="button">Force Decision Cycle</button>
+            <button class="action-button" data-command="replay world at event head" type="button">Replay Current Head</button>
+            <button class="action-button" data-command="llm: optimize queue stability" type="button">Ask DSE</button>
+          </div>
+          <div class="queue-list" id="queueList"></div>
+        </section>
+      </section>
+
+      <section class="tab-view" id="tab-ideas" data-tab-view="ideas" role="tabpanel">
+        <section class="panel idea-panel" aria-labelledby="ideaTitle">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">IDEA FACTORY</p>
+              <h2 id="ideaTitle">Idea -> Architecture -> Tasks -> Bids</h2>
+            </div>
+          </div>
+          <form class="idea-form" id="ideaForm">
+            <textarea id="ideaInput" rows="8" placeholder="Describe a system idea. The compiler generates architecture first, then task graph and bid signals."></textarea>
+            <div class="idea-actions">
+              <button type="button" id="compileIdeaButton">Compile Architecture</button>
+              <button type="submit">Generate Repo v2 Events</button>
+            </div>
+          </form>
+          <div class="idea-result" id="ideaResult"></div>
+        </section>
+      </section>
+
+      <section class="tab-view" id="tab-state" data-tab-view="state" role="tabpanel">
+        <section class="panel state-panel" aria-labelledby="stateTitle">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">STATE INTELLIGENCE</p>
+              <h2 id="stateTitle">Registry / Leases / Agents</h2>
+            </div>
+          </div>
+          <dl class="state-table">
+            <dt>snapshot_hash</dt><dd id="snapshotHash">--</dd>
+            <dt>event_head</dt><dd id="eventHead">--</dd>
+            <dt>decision_sequence</dt><dd id="decisionSequence">--</dd>
+            <dt>generated_at</dt><dd id="generatedAt">--</dd>
+          </dl>
+          <div class="state-columns">
+            <div class="agent-list" id="agentList"></div>
+            <div class="market-list" id="marketList"></div>
+          </div>
+        </section>
+      </section>
+
+      <section class="tab-view" id="tab-tap" data-tab-view="tap" role="tabpanel">
+        <section class="panel tap-panel" aria-labelledby="tapTitle">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">TAP COMMAND LAYER</p>
+              <h2 id="tapTitle">OS Console</h2>
+            </div>
+          </div>
+          <div class="console-output" id="tapOutput" aria-live="polite"></div>
+          <form class="tap-form" id="tapForm">
+            <span>&gt;</span>
+            <input id="tapInput" autocomplete="off" spellcheck="false" placeholder="simulate task TASK-0001 with agent A-1">
+            <button type="submit">EXEC</button>
+          </form>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="/ui/coi.js" type="module"></script>
+</body>
+</html>

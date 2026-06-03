@@ -1,0 +1,368 @@
+name: Review Gate
+
+# Enforces review legitimacy and atomic lock rules before any merge.
+#
+# ARCHITECTURE CONTRACT:
+#   - Source of truth for lock state: .task-locks/registry.json
+#   - Transition rules: .task-locks/transitions.yaml
+#   - This workflow READS both; it never writes them.
+#   - TASK_LOCKS.md is NOT read by this workflow.
+#
+# Atomic lock rules enforced here:
+#   - ONLY a REVIEW agent may approve a REVIEW_LOCKED task.
+#   - The reviewer must not be the same agent as the implementation author.
+#   - The reviewer must hold the review_lock for the task in registry.json.
+#   - ONLY an ARCHITECT may merge (TASK_MERGED event).
+#   - ONLY an ARCHITECT may issue TASK_ARCHITECT_OVERRIDE.
+#   - These rules are derived from transitions.yaml allowed_roles — not hardcoded.
+#
+# Cargo validation:
+#   - cargo check, cargo test, cargo fmt, cargo clippy are run on every PR.
+#   - Determinism check: scans changed Rust files for forbidden time/RNG calls.
+#   - Roadmap consistency: docs/ROADMAP.md must match registry projection.
+#   - Note: regex-only determinism check is a baseline. AST-based enforcement
+#     (using syn crate) is planned for a future phase.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, review_requested]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # JOB 1: Lock legitimacy check
+  # Validates the reviewing agent holds the review_lock in registry.json
+  # and that all atomic lock transition rules are satisfied.
+  # ---------------------------------------------------------------------------
+  lock-legitimacy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install js-yaml
+        run: npm install js-yaml --prefix /tmp/nova-review
+
+      - name: Validate lock state and reviewer identity
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs   = require('fs');
+            const yaml = require('/tmp/nova-review/node_modules/js-yaml');
+
+            const pr     = context.payload.pull_request || context.payload.review?.pull_request;
+            const review = context.payload.review;  // present only on pull_request_review event
+
+            if (!pr) {
+              core.info('No PR context — skipping lock legitimacy check.');
+              return;
+            }
+
+            const body   = pr.body || '';
+            const author = pr.user.login;
+
+            // Parse task ID and role from PR body.
+            const taskMatch  = body.match(/Task\s*ID:\s*(TASK-\d{4,}(-[a-z])?)/i);
+            const roleMatch  = body.match(/Role:\s*(IMPLEMENTATION|REFACTOR|REVIEW|ARCHITECT)/i);
+            const modelMatch = body.match(/Model:\s*([^\n\r*]+)/i);
+
+            if (!taskMatch) {
+              core.info('No task ID in PR body — skipping lock check.');
+              return;
+            }
+
+            const taskId   = taskMatch[1];
+            const prRole   = roleMatch  ? roleMatch[1].toUpperCase() : null;
+            const prModel  = modelMatch ? modelMatch[1].trim()       : null;
+
+            // Load registry and transitions.
+            const registry    = JSON.parse(fs.readFileSync('.task-locks/registry.json', 'utf8'));
+            const transitions = yaml.load(fs.readFileSync('.task-locks/transitions.yaml', 'utf8'));
+
+            const task = registry.tasks.find(t => t.task_id === taskId);
+            if (!task) {
+              core.warning(`Task ${taskId} not found in registry — cannot validate locks.`);
+              return;
+            }
+
+            const implLock   = task.implementation_lock;
+            const reviewLock = task.review_lock;
+
+            // ----------------------------------------------------------------
+            // RULE: Reviewer must not be the implementation author.
+            // This is a hard architectural rule, not a policy preference.
+            // ----------------------------------------------------------------
+            if (review && review.state === 'APPROVED') {
+              const reviewer = review.user.login;
+
+              if (reviewer === author) {
+                core.setFailed(
+                  `❌ ATOMIC LOCK VIOLATION: Reviewer '${reviewer}' is the same as the PR author.\n` +
+                  `A REVIEW agent must be a different agent from the IMPLEMENTATION author.\n` +
+                  `See .task-locks/transitions.yaml § lock_atomicity.`
+                );
+                return;
+              }
+
+              // The reviewing agent must hold (or be acquiring) the review_lock.
+              if (reviewLock && reviewLock.agent && reviewLock.agent !== reviewer) {
+                core.setFailed(
+                  `❌ ATOMIC LOCK VIOLATION: Review submitted by '${reviewer}', ` +
+                  `but review_lock is held by '${reviewLock.agent}'.\n` +
+                  `Only the agent holding the review_lock may approve this task.\n` +
+                  `Current review_lock holder: ${reviewLock.agent} (role: ${reviewLock.role})\n` +
+                  `See .task-locks/transitions.yaml § lock_atomicity.review_lock.`
+                );
+                return;
+              }
+
+              // Verify the task is actually in REVIEW_LOCKED state.
+              if (task.status !== 'REVIEW_LOCKED' && task.status !== 'APPROVED') {
+                core.setFailed(
+                  `❌ ATOMIC LOCK VIOLATION: Task '${taskId}' is in state '${task.status}', ` +
+                  `but a review approval was submitted.\n` +
+                  `Tasks must be in REVIEW_LOCKED state to receive a review.\n` +
+                  `Current state was derived from .task-locks/registry.json.`
+                );
+                return;
+              }
+
+              core.info(
+                `✓ Review legitimacy confirmed:\n` +
+                `  Reviewer: ${reviewer} (different from author ${author})\n` +
+                `  Task:     ${taskId} (status: ${task.status})\n` +
+                `  Lock:     ${reviewLock ? reviewLock.agent : 'pending transfer'}`
+              );
+            }
+
+            // ----------------------------------------------------------------
+            // RULE: Only ARCHITECT may merge (validate on PR itself).
+            // The ARCHITECT role is checked by reading allowed_roles from
+            // transitions.yaml for the TASK_MERGED event — not hardcoded.
+            // ----------------------------------------------------------------
+            if (task.status === 'APPROVED' && prRole) {
+              const approvedTransitions = transitions.transitions['APPROVED'] || {};
+              const mergeTransition     = approvedTransitions['TASK_MERGED'];
+              const allowedToMerge      = mergeTransition
+                ? new Set(mergeTransition.allowed_roles || [])
+                : new Set(['ARCHITECT']);
+
+              if (prRole !== 'ARCHITECT' && allowedToMerge.size > 0) {
+                core.warning(
+                  `ℹ️ Task '${taskId}' is APPROVED. ` +
+                  `Merge must be performed by: ${[...allowedToMerge].join(', ')} ` +
+                  `(from transitions.yaml).`
+                );
+              }
+            }
+
+            // ----------------------------------------------------------------
+            // RULE: implementation_lock can only be released by REVIEW or system.
+            // Verify the lock state is consistent with the declared role.
+            // ----------------------------------------------------------------
+            const lockAtomicity = transitions.lock_atomicity || {};
+            const implLockRules = lockAtomicity.implementation_lock || {};
+
+            if (implLock && prRole) {
+              const cannotRelease = new Set(implLockRules.cannot_release || []);
+              if (cannotRelease.has(prRole) && task.status === 'IN_PROGRESS') {
+                // This is just advisory here — the actual enforcement is in the
+                // projection builder which validates event transitions.
+                core.info(
+                  `ℹ️ Role '${prRole}' cannot directly release implementation_lock. ` +
+                  `This is enforced by the projection builder via transitions.yaml.`
+                );
+              }
+            }
+
+            core.info(`✓ Lock legitimacy check passed for task ${taskId} (status: ${task.status})`);
+
+  # ---------------------------------------------------------------------------
+  # JOB 2: Roadmap projection consistency
+  # ROADMAP.md is a derived view. It must match registry.json before review/merge.
+  # ---------------------------------------------------------------------------
+  roadmap-consistency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify ROADMAP.md is a registry projection
+        run: node .task-locks/roadmap-projection.mjs verify
+  # ---------------------------------------------------------------------------
+  # JOB 3: Merge readiness gate
+  # A PR is merge-ready only when review has approved and registry says APPROVED/MERGED.
+  # ---------------------------------------------------------------------------
+  merge-readiness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify review approval and task state
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const pr = context.payload.pull_request || context.payload.review?.pull_request;
+            if (!pr) {
+              core.info('No PR context; skipping merge readiness check.');
+              return;
+            }
+
+            const body = pr.body || '';
+            const taskMatch = body.match(/Task\s*ID:\s*(TASK-\d{4,}(-[a-z])?)/i);
+            if (!taskMatch) {
+              core.setFailed('Missing Task ID in PR body. Cannot verify merge readiness.');
+              return;
+            }
+
+            const taskId = taskMatch[1];
+            const registry = JSON.parse(fs.readFileSync('.task-locks/registry.json', 'utf8'));
+            const task = registry.tasks.find(t => t.task_id === taskId);
+            if (!task) {
+              core.setFailed(`Task ${taskId} not found in registry.json.`);
+              return;
+            }
+
+            const reviews = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+            const hasApproval = reviews.data.some(review => review.state === 'APPROVED');
+            if (!hasApproval) {
+              core.setFailed(`PR #${pr.number} has no APPROVED review yet.`);
+              return;
+            }
+
+            if (!['APPROVED', 'MERGED'].includes(task.status)) {
+              core.setFailed(
+                `Task ${taskId} is ${task.status}. Merge requires registry state APPROVED or MERGED. ` +
+                `Wait for TASK_APPROVED to be projected into registry.json.`
+              );
+              return;
+            }
+
+            core.info(`Merge readiness confirmed for ${taskId}: review approved, task status ${task.status}.`);
+  # ---------------------------------------------------------------------------
+  # JOB 4: Cargo validation — build, test, fmt, clippy
+  # ---------------------------------------------------------------------------
+  cargo-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build workspace
+        run: cargo build --all --verbose --all-targets
+        timeout-minutes: 60
+
+      - name: Run tests
+        run: cargo test --all --verbose
+        timeout-minutes: 60
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Run clippy (deny warnings)
+        run: cargo clippy --all --all-targets -- -D warnings
+        timeout-minutes: 30
+
+  # ---------------------------------------------------------------------------
+  # JOB 5: Determinism check
+  # Scans changed Rust files for forbidden non-deterministic API calls.
+  #
+  # Current implementation: regex-based (catches direct usage).
+  # Known limitation: aliasing bypasses regex — e.g. `use std::time::SystemTime as T`.
+  # Future phase: AST-based scan using the `syn` crate for full structural guarantee.
+  # ---------------------------------------------------------------------------
+  determinism-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan changed Rust files for forbidden calls
+        run: |
+          # Get changed Rust files between PR base and head.
+          changed=$(git diff --name-only \
+            "${{ github.event.pull_request.base.sha }}"..HEAD \
+            --diff-filter=ACMR -- '*.rs' 2>/dev/null || echo '')
+
+          if [ -z "$changed" ]; then
+            echo "✓ No Rust files changed."
+            exit 0
+          fi
+
+          echo "Scanning $(echo "$changed" | wc -l | tr -d ' ') changed Rust file(s)..."
+
+          # Forbidden patterns.
+          # These are GAME LOGIC paths only — not build scripts or test helpers.
+          PATTERNS=(
+            "rand::random"
+            "thread_rng"
+            "SmallRng::from_entropy"
+            "StdRng::from_entropy"
+            "SystemTime::now"
+            "Instant::now"
+            "Utc::now"
+            "Local::now"
+            "chrono::Local"
+          )
+
+          found_issues=false
+
+          for pattern in "${PATTERNS[@]}"; do
+            matches=$(echo "$changed" | xargs grep -l "${pattern}" 2>/dev/null || true)
+            if [ -n "$matches" ]; then
+              echo "❌ Forbidden non-deterministic call '${pattern}' in:"
+              echo "$matches" | sed 's/^/    /'
+              found_issues=true
+            fi
+          done
+
+          # Also check for HashMap in determinism-critical modules (ECS, world gen).
+          det_critical=$(echo "$changed" | grep -E 'nova-(ecs|world|ai|quest|faction|economy)' || true)
+          if [ -n "$det_critical" ]; then
+            hash_uses=$(echo "$det_critical" | xargs grep -l "HashMap::new\|HashMap<" 2>/dev/null || true)
+            if [ -n "$hash_uses" ]; then
+              echo "⚠️  HashMap found in determinism-critical crate(s):"
+              echo "$hash_uses" | sed 's/^/    /'
+              echo "    Use BTreeMap for deterministic iteration order."
+              found_issues=true
+            fi
+          fi
+
+          if [ "$found_issues" = true ]; then
+            echo ""
+            echo "Determinism rule: use ChaCha8Rng::seed_from_u64(seed) for all RNG."
+            echo "                  Time must be injected via GameClock, not read from the system."
+            echo ""
+            echo "NOTE: This is a regex scan. Aliased imports are not caught here."
+            echo "      AST-based enforcement (syn crate) is planned for a future phase."
+            exit 1
+          fi
+
+          echo "✓ Determinism check passed (regex baseline)."

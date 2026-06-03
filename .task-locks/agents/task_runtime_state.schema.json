@@ -1,0 +1,262 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://nova25/task-locks/agents/task_runtime_state.schema.json",
+  "$comment": "schema_version=1.0.0 | Added 2026-06-03 | Agent Runtime Layer. Defines the computed per-task runtime state used for lease gating. Never stored on disk — produced on demand by agent-runtime.mjs. Breaking changes require engine_version bump + Architect RFC.",
+  "title": "NOVA 2.5 Task Runtime State",
+  "description": "Computed view of a single task's runtime state: active leases, review legality gate, and implementation stability. Produced by agent-runtime.mjs#computeTaskRuntimeState(). This document is ephemeral — it is never stored on disk; it is computed on demand from registry.json + leases.json + TASK_EVENTS.jsonl HEAD.",
+  "type": "object",
+  "required": [
+    "task_id",
+    "state",
+    "review_gate",
+    "implementation_stability",
+    "evaluated_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+
+    "task_id": {
+      "type": "string",
+      "pattern": "^TASK-[0-9]{4,}(-[a-z])?$",
+      "description": "Task this runtime state applies to."
+    },
+
+    "state": {
+      "type": "string",
+      "enum": [
+        "TODO",
+        "IN_PROGRESS",
+        "REFACTOR_CLAIMED",
+        "REVIEW_LOCKED",
+        "APPROVED",
+        "MERGED",
+        "EXPIRED"
+      ],
+      "description": "Current task status, sourced from .task-locks/registry.json."
+    },
+
+    "implementation_lease": {
+      "description": "Active IMPLEMENTATION or REFACTOR lease on this task, if any. Null when the task has no active implementation lock.",
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/definitions/active_lease_ref" }
+      ]
+    },
+
+    "review_lease": {
+      "description": "Active REVIEW or ARCHITECT lease on this task, if any. Null when no review lock is held.",
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/definitions/active_lease_ref" }
+      ]
+    },
+
+    "review_gate": {
+      "$ref": "#/definitions/review_gate",
+      "description": "Three-part gate that must be fully satisfied before a REVIEW lease is considered legal. Each part is independently evaluated and recorded."
+    },
+
+    "implementation_stability": {
+      "$ref": "#/definitions/implementation_stability",
+      "description": "Current stability assessment for the implementation lock. Derived from heartbeat recency relative to the lock TTL."
+    },
+
+    "evaluated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp at which this runtime state was computed. NOT sourced from the event log — uses the evaluating process's clock. Consumers must treat this as a point-in-time snapshot that may become stale."
+    }
+  },
+
+  "definitions": {
+
+    "active_lease_ref": {
+      "type": "object",
+      "description": "Summary of an active lease. Full record is in .task-locks/agents/leases.json.",
+      "required": [
+        "lease_id",
+        "agent_id",
+        "role",
+        "role_category",
+        "acquired_at",
+        "expires_at",
+        "last_heartbeat",
+        "renewal_count"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "lease_id":      { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "agent_id":      { "type": "string", "minLength": 1 },
+        "role": {
+          "type": "string",
+          "enum": ["IMPLEMENTATION", "REFACTOR", "REVIEW", "ARCHITECT"]
+        },
+        "role_category": {
+          "type": "string",
+          "enum": ["implementation_lock", "review_lock"]
+        },
+        "acquired_at":    { "type": "string", "format": "date-time" },
+        "expires_at":     { "type": "string", "format": "date-time" },
+        "last_heartbeat": { "type": "string", "format": "date-time" },
+        "renewal_count":  { "type": "integer", "minimum": 0 },
+        "bound_snapshot_index": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "For REVIEW/ARCHITECT leases: the snapshot this review is bound to. Null for IMPLEMENTATION/REFACTOR."
+        }
+      }
+    },
+
+    "review_gate": {
+      "type": "object",
+      "description": "Three independent gate conditions that jointly determine review_legal. All three must be satisfied for review_legal=true. A REVIEW lease MUST NOT be acquired if review_legal=false.",
+      "required": [
+        "claim_bound",
+        "stability_bound",
+        "finalization_bound",
+        "review_legal"
+      ],
+      "additionalProperties": false,
+      "properties": {
+
+        "claim_bound": {
+          "$ref": "#/definitions/gate_condition_claim",
+          "description": "Snapshot post-dates the TASK_CLAIMED event. Ensures the reviewer sees work done AFTER the agent claimed the task, not a stale pre-claim snapshot."
+        },
+
+        "stability_bound": {
+          "$ref": "#/definitions/gate_condition_stability",
+          "description": "The implementation lock was heartbeat-alive at snapshot time. Ensures the reviewer does not evaluate an artifact produced by a stale or already-expired lock."
+        },
+
+        "finalization_bound": {
+          "$ref": "#/definitions/gate_condition_finalization",
+          "description": "The snapshot was triggered by a TASK_REVIEW_REQUESTED event, not an auto-checkpoint or manual snapshot. Ensures the reviewer sees intentionally submitted work — not a mid-flight checkpoint."
+        },
+
+        "review_legal": {
+          "type": "boolean",
+          "description": "True if and only if claim_bound.satisfied AND stability_bound.satisfied AND finalization_bound.satisfied. This is the single authoritative gate flag: lease-manager.mjs refuses to acquire a review lease when review_legal=false."
+        }
+      }
+    },
+
+    "gate_condition_claim": {
+      "type": "object",
+      "description": "Claim-bound: snapshot.event_count MUST be strictly greater than claim_event_index. Formally: bound_snapshot.event_count > claim_event_index.",
+      "required": ["satisfied", "claim_event_index", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "satisfied": {
+          "type": "boolean",
+          "description": "True when a qualifying snapshot exists and snapshot.event_count > claim_event_index."
+        },
+        "bound_snapshot_index": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Index of the snapshot that satisfies this bound, if found. Null when no qualifying snapshot exists."
+        },
+        "claim_event_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "event_index of the TASK_CLAIMED event that opened the implementation slot being reviewed."
+        },
+        "snapshot_event_count": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "event_count field of the candidate snapshot. Must be > claim_event_index for this bound to be satisfied. Null when no candidate exists."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Human-readable explanation of why this bound is satisfied or not."
+        }
+      }
+    },
+
+    "gate_condition_stability": {
+      "type": "object",
+      "description": "Stability-bound: the implementation lock must have been heartbeat-alive at the moment the snapshot was taken. Formally: snapshot.timestamp was within the lock TTL window of the last heartbeat at that time.",
+      "required": ["satisfied", "impl_ttl_seconds", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "satisfied": {
+          "type": "boolean",
+          "description": "True when the implementation lock was alive (not stale) at snapshot time."
+        },
+        "snapshot_impl_heartbeat_age_seconds": {
+          "type": ["number", "null"],
+          "description": "Age of the implementation lock's last_heartbeat relative to the snapshot timestamp, in seconds. Null when no snapshot or no implementation lock record exists at that point."
+        },
+        "impl_ttl_seconds": {
+          "type": "number",
+          "description": "The TTL (in seconds) of the implementation lock, sourced from transitions.yaml. Typically 21600 (6 h) for IMPLEMENTATION, 7200 (2 h) for REFACTOR."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Human-readable explanation of why this bound is satisfied or not."
+        }
+      }
+    },
+
+    "gate_condition_finalization": {
+      "type": "object",
+      "description": "Finalization-bound: the qualifying snapshot must have been triggered by a TASK_REVIEW_REQUESTED event. Auto-snapshots and manual snapshots do not satisfy this bound.",
+      "required": ["satisfied", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "satisfied": {
+          "type": "boolean",
+          "description": "True when the qualifying snapshot was triggered by TASK_REVIEW_REQUESTED."
+        },
+        "trigger_event_type": {
+          "type": ["string", "null"],
+          "description": "event_type of the event that triggered the qualifying snapshot. Must equal 'TASK_REVIEW_REQUESTED' for this bound to be satisfied. Null when no qualifying snapshot exists."
+        },
+        "trigger_event_index": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "event_index of the trigger event. Null when no qualifying snapshot exists."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Human-readable explanation of why this bound is satisfied or not."
+        }
+      }
+    },
+
+    "implementation_stability": {
+      "type": "object",
+      "description": "Current stability of the implementation lock. An implementation is 'stable' when the lock is active AND the last heartbeat is within the lock TTL. Used by consumers (schedulers, dashboards) to detect stale work before attempting lease operations.",
+      "required": ["stable", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "stable": {
+          "type": "boolean",
+          "description": "True when implementation_lease is not null AND heartbeat_age_seconds < ttl_seconds."
+        },
+        "agent_id": {
+          "type": ["string", "null"],
+          "description": "Agent holding the implementation lock, if any."
+        },
+        "heartbeat_age_seconds": {
+          "type": ["number", "null"],
+          "description": "Seconds since the last TASK_HEARTBEAT or LEASE_RENEWED event on the implementation lock, measured from evaluated_at. Null when no implementation lease is active."
+        },
+        "ttl_seconds": {
+          "type": "number",
+          "description": "Lock TTL from transitions.yaml. Typically 21600 s (IMPLEMENTATION) or 7200 s (REFACTOR)."
+        },
+        "expires_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Absolute expiry of the current implementation lease. Null when no lease is active."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Human-readable explanation of the stability assessment."
+        }
+      }
+    }
+
+  }
+}

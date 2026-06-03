@@ -1,0 +1,55 @@
+{
+  "$comment": "Scheduler policy — defines state classifications, scoring weights, and priority tiers. Read by scheduler.mjs and integrity-bridge.mjs. Edit via Architect RFC only.",
+  "policy_version": "1.1.0",
+  "updated": "2026-06-03",
+
+  "schedulable_states": {
+    "TODO":          "IMPLEMENTATION",
+    "REVIEW_LOCKED": "REVIEW"
+  },
+
+  "monitoring_states": [
+    "IN_PROGRESS",
+    "REFACTOR_CLAIMED"
+  ],
+
+  "terminal_states": [
+    "MERGED",
+    "EXPIRED"
+  ],
+
+  "excluded_states": [
+    "APPROVED"
+  ],
+
+  "score_parameters": {
+    "comment": "All parameters relevant to deterministic scoring. Changes require Architect RFC.",
+
+    "urgency_halflife_events": 100,
+    "urgency_max_dep_pressure": 5,
+
+    "score_weights": {
+      "comment": "Must sum to 1.0. Components are normalized to [0,1] before weighting.",
+      "urgency":               0.35,
+      "dependency_pressure":   0.25,
+      "trust":                 0.25,
+      "complexity_inverse":    0.15
+    },
+
+    "priority_tiers": {
+      "comment": "Discrete exponential multipliers derived from task.priority_weight. priority_weight is mapped to the highest tier it satisfies.",
+      "P0": { "max_weight": 1.0, "multiplier": 1 },
+      "P1": { "max_weight": 2.0, "multiplier": 2 },
+      "P2": { "max_weight": 4.0, "multiplier": 4 },
+      "P3": { "max_weight": 999, "multiplier": 8 }
+    },
+
+    "default_priority_weight": 1.0,
+    "default_execution_cost":  1,
+    "valid_execution_costs":   [1, 2, 3, 5, 8, 13, 21],
+
+    "fixed_point_scale": 1000000,
+
+    "bridge_token_ttl_seconds": 60
+  }
+}

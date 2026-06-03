@@ -1,0 +1,29 @@
+{
+  "$comment": "LM Studio daemon configuration for headless / CI operation.",
+  "schema_version": "1.0.0",
+
+  "daemon": {
+    "host":  "127.0.0.1",
+    "port":  1234,
+    "auto_start": true,
+    "log_level": "info"
+  },
+
+  "default_model": "Qwen3-Zero-Coder-Reasoning-V2-0.8B-NEO-EX-IQ4_XS",
+  "creative_model": "Qwen3-Zero-Coder-Reasoning-V2-0.8B-NEO-EX-IQ3_M",
+
+  "inference": {
+    "temperature":   0.05,
+    "creative_temperature": 0.35,
+    "max_tokens":    1024,
+    "stream":        false,
+    "system_prompt": "You are the TAP planning layer for an event-sourced control plane. Output structured JSON only. You may compile ideas into architecture proposals. You never create tasks directly, never score scheduler decisions, never acquire leases, and never write events."
+  },
+
+  "plugin_sandbox": {
+    "enabled":         true,
+    "allow_network":   false,
+    "allow_fs_write":  false,
+    "timeout_seconds": 10
+  }
+}

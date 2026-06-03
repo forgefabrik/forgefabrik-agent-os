@@ -1,0 +1,320 @@
+name: Agent Validation
+
+# Validates every PR against the event-sourced workflow kernel.
+#
+# ARCHITECTURE CONTRACT:
+#   - Source of truth for task state: .task-locks/registry.json
+#   - Source of truth for transitions: .task-locks/transitions.yaml
+#   - This workflow READS both; it never writes them.
+#   - No state logic is duplicated here. Allowed roles and states
+#     are read from transitions.yaml, not hardcoded.
+#   - TASK_LOCKS.md is NOT read by this workflow.
+#
+# Hard fail conditions (block merge):
+#   - Missing agent declaration (Role, Task ID, Model)
+#   - Branch name does not match schema
+#   - Task does not exist in registry
+#   - Task is in EXPIRED (terminal) or MERGED state
+#   - Task is already locked by a different agent
+#   - Role is not permitted for the declared transition
+#   - Model is not approved for the declared role
+#   - Commit message format invalid (exceptions: system/merge/bot commits)
+#
+# EXPIRED task → hard fail with canonical fork instructions.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install js-yaml
+        run: npm install js-yaml --prefix /tmp/nova-validation
+
+      - name: Validate agent declaration
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs   = require('fs');
+            const yaml = require('/tmp/nova-validation/node_modules/js-yaml');
+
+            const pr      = context.payload.pull_request;
+            const body    = pr.body || '';
+            const headRef = pr.head.ref;
+            const author  = pr.user.login;
+
+            // ----------------------------------------------------------------
+            // 1. Parse required declaration fields
+            // ----------------------------------------------------------------
+            const roleMatch  = body.match(/\*{0,2}Role:\*{0,2}\s*(IMPLEMENTATION|REFACTOR|REVIEW|ARCHITECT)/i);
+            const taskMatch  = body.match(/\*{0,2}Task\s*ID:\*{0,2}\s*(TASK-\d{4,}(-[a-z])?)/i);
+            const modelMatch = body.match(/\*{0,2}Model:\*{0,2}\s*([^\n\r*]+)/i);
+
+            const missing = [];
+            if (!roleMatch)  missing.push('`Role: IMPLEMENTATION|REFACTOR|REVIEW|ARCHITECT`');
+            if (!taskMatch)  missing.push('`Task ID: TASK-XXXX`');
+            if (!modelMatch) missing.push('`Model: <model name>`');
+
+            if (missing.length > 0) {
+              core.setFailed(
+                `❌ Agent declaration incomplete. Missing fields:\n` +
+                missing.map(f => `  - ${f}`).join('\n') +
+                `\n\nUse the PR template at .github/AGENT_PR_TEMPLATE.md.`
+              );
+              return;
+            }
+
+            const role   = roleMatch[1].toUpperCase();
+            const taskId = taskMatch[1];
+            const model  = modelMatch[1].trim();
+
+            // ----------------------------------------------------------------
+            // 2. Branch name must match schema and contain the task ID
+            // ----------------------------------------------------------------
+            // Valid: feat/TASK-0001-description
+            //        refactor/TASK-0001-description
+            //        review/TASK-0001-description
+            //        hotfix/TASK-0001-description
+            const branchPattern = /^(feat|refactor|review|hotfix)\/TASK-\d{4,}(-[a-z])?-[a-z0-9\-]+$/i;
+            if (!branchPattern.test(headRef)) {
+              core.setFailed(
+                `❌ Invalid branch name: '${headRef}'\n` +
+                `Expected: feat|refactor|review|hotfix/TASK-XXXX-description\n` +
+                `Example:  feat/TASK-0001-entity-allocator`
+              );
+              return;
+            }
+
+            // Branch must reference the same task ID declared in the PR body.
+            if (!headRef.includes(taskId)) {
+              core.setFailed(
+                `❌ Branch '${headRef}' does not contain declared task ID '${taskId}'.\n` +
+                `Branch and Task ID must match to prevent cross-task confusion.`
+              );
+              return;
+            }
+
+            // ----------------------------------------------------------------
+            // 3. Load transition engine (single source of truth for roles/states)
+            // ----------------------------------------------------------------
+            const transitions = yaml.load(fs.readFileSync('.task-locks/transitions.yaml', 'utf8'));
+
+            // ----------------------------------------------------------------
+            // 4. Model approval check (from AGENTS.md model requirements)
+            // ----------------------------------------------------------------
+            // These rules are derived from AGENTS.md, not duplicated from
+            // transitions.yaml. They are intentionally kept here because model
+            // approval is a PR-time gate, not a state-machine concern.
+            const modelLower = model.toLowerCase();
+            const isTier1 = /claude.*(3\.5|sonnet)|gpt.?4.*(turbo)?/i.test(model);
+            const isTier2 = /llama.*(2|3).*(70b|70b\+)?|mistral.?medium|gemini.?1\.?5/i.test(model);
+
+            const modelApproved = {
+              IMPLEMENTATION: isTier1 || isTier2,
+              REFACTOR:       isTier1,
+              REVIEW:         isTier1,
+              ARCHITECT:      isTier1,
+            };
+
+            if (!modelApproved[role]) {
+              core.setFailed(
+                `❌ Model '${model}' is not approved for role ${role}.\n` +
+                (role === 'REVIEW' || role === 'ARCHITECT' || role === 'REFACTOR'
+                  ? `${role} requires Claude 3.5 Sonnet or GPT-4 Turbo.`
+                  : `IMPLEMENTATION requires Tier 1 (Claude 3.5/GPT-4) or Tier 2 (Llama 70B+, Mistral Medium).`)
+              );
+              return;
+            }
+
+            // ----------------------------------------------------------------
+            // 5. Task state check against registry.json
+            // ----------------------------------------------------------------
+            const registry = JSON.parse(fs.readFileSync('.task-locks/registry.json', 'utf8'));
+            const task = registry.tasks.find(t => t.task_id === taskId);
+
+            if (!task) {
+              core.setFailed(
+                `❌ Task '${taskId}' not found in registry.json.\n` +
+                `Task existence is validated exclusively against .task-locks/registry.json.`
+              );
+              return;
+            }
+
+            // TERMINAL STATE: EXPIRED — hard block with fork instructions.
+            if (task.status === 'EXPIRED') {
+              // Compute what the next fork ID would be using the canonical function.
+              const alphabet = transitions.fork_suffix_alphabet || 'abcdefghijklmnopqrstuvwxyz';
+              const match = taskId.match(/^(TASK-\d{4,})(-([a-z]))?$/);
+              let nextFork = `${match[1]}-a`;
+              if (match[3]) {
+                const idx = alphabet.indexOf(match[3]);
+                nextFork = idx < alphabet.length - 1
+                  ? `${match[1]}-${alphabet[idx + 1]}`
+                  : null;
+              }
+              const forkNote = nextFork
+                ? `Next fork would be: \`${nextFork}\`. An ARCHITECT must write a TASK_FORKED event to create it.`
+                : `Fork alphabet exhausted. Escalate to human architect.`;
+
+              core.setFailed(
+                `❌ Task '${taskId}' is in EXPIRED state (terminal).\n` +
+                `EXPIRED tasks cannot be claimed. ${forkNote}\n\n` +
+                `See .task-locks/transitions.yaml § terminal_states.`
+              );
+              return;
+            }
+
+            // TERMINAL STATE: MERGED — hard block.
+            if (task.status === 'MERGED') {
+              core.setFailed(
+                `❌ Task '${taskId}' is already MERGED. No further work can be submitted.`
+              );
+              return;
+            }
+
+            // ----------------------------------------------------------------
+            // 6. Conflict check — task already locked by a different agent
+            // ----------------------------------------------------------------
+            const implLock   = task.implementation_lock;
+            const reviewLock = task.review_lock;
+            const activeLock = implLock || reviewLock;
+
+            if (activeLock && activeLock.agent !== author) {
+              const expiresAt = activeLock.expires_at
+                ? `Lock expires at: ${activeLock.expires_at}`
+                : '';
+              core.setFailed(
+                `❌ Task '${taskId}' is locked by agent '${activeLock.agent}' (role: ${activeLock.role}).\n` +
+                `${expiresAt}\n\n` +
+                `Options:\n` +
+                `  1. Wait for the lock to expire (system will write TASK_LOCK_EXPIRED)\n` +
+                `  2. Choose a different unassigned task (status TODO in registry)\n` +
+                `  3. Request ARCHITECT override if the agent is unresponsive`
+              );
+              return;
+            }
+
+            // ----------------------------------------------------------------
+            // 7. Role must be appropriate for the current task state
+            // ----------------------------------------------------------------
+            // Read allowed roles from transitions.yaml, not hardcoded here.
+            const stateTransitions = transitions.transitions[task.status];
+            let allowedRolesForState = new Set();
+            if (stateTransitions) {
+              for (const t of Object.values(stateTransitions)) {
+                for (const r of (t.allowed_roles || [])) allowedRolesForState.add(r);
+              }
+              // System is internal only — remove it from user-visible roles.
+              allowedRolesForState.delete('system');
+            }
+
+            if (allowedRolesForState.size > 0 && !allowedRolesForState.has(role)) {
+              core.setFailed(
+                `❌ Role '${role}' cannot act on task '${taskId}' in state '${task.status}'.\n` +
+                `Allowed roles for this state: ${[...allowedRolesForState].join(', ')}\n` +
+                `(Derived from .task-locks/transitions.yaml — not hardcoded in CI)`
+              );
+              return;
+            }
+
+            // ----------------------------------------------------------------
+            // 8. All checks passed
+            // ----------------------------------------------------------------
+            core.info(
+              `✓ Agent validation passed:\n` +
+              `  Task:   ${taskId} (status: ${task.status})\n` +
+              `  Role:   ${role}\n` +
+              `  Model:  ${model}\n` +
+              `  Branch: ${headRef}\n` +
+              `  Agent:  ${author}`
+            );
+
+      - name: Validate commit messages
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { data: commits } = await github.rest.pulls.listCommits({
+              owner:       context.repo.owner,
+              repo:        context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            // Hard-fail pattern for agent commits.
+            // Format: [type] scope: description (TASK-XXXX)
+            // Example: [ecs] sparse-set: add insert method (TASK-0002)
+            const validPattern = /^\[[a-z\-]+\]\s+[a-z\-]+:\s+.+\s+\(TASK-\d{4,}(-[a-z])?\)$/;
+
+            // Exemptions — these commit types bypass the format check.
+            // DO NOT remove these exceptions or the CI pipeline breaks itself.
+            const isExempt = (msg) =>
+              msg.startsWith('Merge ')        ||   // GitHub merge commits
+              msg.startsWith('[system] ')     ||   // projection-builder[bot], task-lock[bot]
+              msg.startsWith('Revert "');          // GitHub revert commits
+
+            let invalid = 0;
+            const failures = [];
+
+            for (const { commit } of commits) {
+              const firstLine = commit.message.split('\n')[0].trim();
+              const botAuthor = commit.author && commit.author.name &&
+                (commit.author.name.includes('[bot]') || commit.author.name === 'GitHub Actions');
+
+              if (botAuthor || isExempt(firstLine)) {
+                core.info(`  ✓ (exempt) ${firstLine}`);
+                continue;
+              }
+
+              if (!validPattern.test(firstLine)) {
+                failures.push(firstLine);
+                invalid++;
+              } else {
+                core.info(`  ✓ ${firstLine}`);
+              }
+            }
+
+            if (invalid > 0) {
+              core.setFailed(
+                `❌ ${invalid} commit(s) have invalid message format:\n\n` +
+                failures.map(f => `  "${f}"`).join('\n') +
+                `\n\nRequired format: [type] scope: description (TASK-XXXX)\n` +
+                `Example:          [ecs] sparse-set: add insert impl (TASK-0002)\n\n` +
+                `Exempt commits: Merge commits, [system] prefixed, Revert commits.`
+              );
+            } else {
+              core.info(`✓ All commits match required format.`);
+            }
+
+      - name: Post validation summary as PR comment
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner:      context.repo.owner,
+              repo:       context.repo.repo,
+              issue_number: context.issue.number,
+              body: [
+                '## ❌ Agent Validation Failed',
+                '',
+                'One or more validation checks did not pass. See the Actions log for details.',
+                '',
+                '**Sources of truth consulted:**',
+                '- Task state: `.task-locks/registry.json`',
+                '- Transition rules: `.task-locks/transitions.yaml`',
+                '',
+                '**Common fixes:**',
+                '- Ensure your PR body uses the template at `.github/AGENT_PR_TEMPLATE.md`',
+                '- Verify the task is in `TODO` status in `.task-locks/registry.json`',
+                '- Check that branch name contains the task ID: `feat/TASK-XXXX-description`',
+                '- Use approved model for your role (REVIEW/ARCHITECT require Claude 3.5/GPT-4)',
+                '- Fix commit messages: `[type] scope: description (TASK-XXXX)`',
+              ].join('\n')
+            });

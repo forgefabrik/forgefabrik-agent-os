@@ -1,0 +1,23 @@
+{
+  "$comment": "Hard system limits — prevents resource exhaustion and enforces architectural boundaries.",
+  "schema_version": "1.0.0",
+
+  "max_active_leases_per_agent":  3,
+  "max_active_leases_total":      50,
+  "max_agents_registered":        100,
+  "max_tasks_in_queue":           500,
+  "max_bid_count_per_task":       20,
+  "max_event_log_lines":          100000,
+
+  "lease_ttl_max_seconds":        86400,
+  "bridge_token_ttl_seconds":     60,
+
+  "llm_request_timeout_seconds":  30,
+  "llm_max_context_tokens":       4096,
+
+  "tap_suggestion_max_count":     20,
+  "tap_auto_mode_allowed":        false,
+
+  "sim_max_agents":               10,
+  "sim_max_events_per_run":       1000
+}

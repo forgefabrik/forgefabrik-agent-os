@@ -1,0 +1,13 @@
+{
+  "$comment": "TAP suggestions output — written by tap/tap_engine.mjs. Never edit manually.",
+  "mode": "observe",
+  "generated_at": null,
+  "world_snapshot": null,
+  "task_count": 0,
+  "agent_count": 0,
+  "active_leases": 0,
+  "tasks": [],
+  "top_priority_task": null,
+  "anomalies": [],
+  "summary": "No analysis run yet. Execute: bash tap/run.sh"
+}

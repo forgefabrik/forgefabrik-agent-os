@@ -1,0 +1,112 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://nova25/task-locks/agents/lease.schema.json",
+  "$comment": "schema_version=1.0.0 | Added 2026-06-03 | Agent Runtime Layer. Breaking changes require engine_version bump + Architect RFC.",
+  "title": "NOVA 2.5 Agent Lease Store",
+  "description": "Schema for .task-locks/agents/leases.json. Maintained by lease-manager.mjs. Records all active, released, and expired leases. Never edited manually.",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "leases"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Semver of this lease store format. Bump on breaking schema changes."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC ISO-8601 timestamp of the last write by lease-manager.mjs."
+    },
+    "leases": {
+      "type": "array",
+      "description": "All lease records (active and historical). Historical leases are retained for audit/reputation use.",
+      "items": { "$ref": "#/definitions/lease_record" }
+    }
+  },
+  "definitions": {
+    "lease_record": {
+      "type": "object",
+      "required": [
+        "lease_id",
+        "agent_id",
+        "task_id",
+        "role",
+        "role_category",
+        "acquired_at",
+        "expires_at",
+        "last_heartbeat",
+        "status",
+        "claim_event_index"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "lease_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256(task_id + ':' + agent_id + ':' + acquired_at). Stable identifier for cross-referencing with events."
+        },
+        "agent_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Agent holding this lease. Must match a record in registry.json."
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^TASK-[0-9]{4,}(-[a-z])?$",
+          "description": "Task this lease applies to."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["IMPLEMENTATION", "REFACTOR", "REVIEW", "ARCHITECT"],
+          "description": "Role the agent is acting in for this lease."
+        },
+        "role_category": {
+          "type": "string",
+          "enum": ["implementation_lock", "review_lock"],
+          "description": "Maps role to the lock slot in registry.json. IMPLEMENTATION/REFACTOR → implementation_lock; REVIEW/ARCHITECT → review_lock."
+        },
+        "acquired_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "UTC timestamp when the lease was first acquired (TASK_CLAIMED event timestamp)."
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "UTC timestamp when the lease expires if not renewed. Recomputed on each LEASE_RENEWED event."
+        },
+        "last_heartbeat": {
+          "type": "string",
+          "format": "date-time",
+          "description": "UTC timestamp of the most recent TASK_HEARTBEAT or LEASE_RENEWED event. Used to detect stale leases."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ACTIVE", "RELEASED", "EXPIRED"],
+          "description": "ACTIVE: lease is current. RELEASED: agent voluntarily released via TASK_RELEASED. EXPIRED: system emitted LEASE_EXPIRED after missed heartbeat."
+        },
+        "claim_event_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "event_index of the TASK_CLAIMED (or TASK_REFACTOR_REQUESTED) event that opened this lease slot. Used by task_runtime_state claim-bound validation."
+        },
+        "bound_snapshot_index": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "For REVIEW/ARCHITECT leases: the snapshot_index this review is bound to. Must satisfy the three-part gate in task_runtime_state.schema.json before review_legal=true. Null for IMPLEMENTATION/REFACTOR leases."
+        },
+        "renewal_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of times this lease has been renewed via LEASE_RENEWED. Incremented by lease-manager.mjs on each renewal."
+        },
+        "released_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "UTC timestamp of release (TASK_RELEASED or LEASE_EXPIRED event). Null while ACTIVE."
+        }
+      }
+    }
+  }
+}

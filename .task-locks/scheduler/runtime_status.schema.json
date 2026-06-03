@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://nova25/task-locks/scheduler/runtime_status.schema.json",
+  "$comment": "schema_version=1.0.0 | Added 2026-06-03 | Scheduler Layer. Format for scheduler/runtime_status.json.",
+  "title": "NOVA 2.5 Scheduler Runtime Status",
+  "description": "Monitoring view of tasks that are currently active (IN_PROGRESS, REFACTOR_CLAIMED). Distinct from queue.json: this covers work already assigned, not work to be assigned. Used by the dashboard and lease health monitors.",
+  "type": "object",
+  "required": ["schema_version", "scheduler_sequence", "generated_at", "monitored"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version":       { "type": "string", "const": "1.0.0" },
+    "scheduler_sequence":   { "type": "integer", "minimum": 0 },
+    "registry_event_count": { "type": "integer", "minimum": 0 },
+    "generated_at":         { "type": "string", "format": "date-time" },
+    "monitored": {
+      "type": "array",
+      "description": "One entry per active task (IN_PROGRESS or REFACTOR_CLAIMED). Ordered by lease health ascending (least healthy first) so critical tasks surface quickly.",
+      "items": { "$ref": "#/definitions/monitored_entry" }
+    }
+  },
+  "definitions": {
+    "monitored_entry": {
+      "type": "object",
+      "required": ["task_id", "state", "assigned_agent", "lease_health"],
+      "additionalProperties": false,
+      "properties": {
+        "task_id":   { "type": "string", "pattern": "^TASK-[0-9]{4,}(-[a-z])?$" },
+        "state":     { "type": "string", "enum": ["IN_PROGRESS", "REFACTOR_CLAIMED"] },
+        "assigned_agent": {
+          "type": ["string", "null"],
+          "description": "agent_id currently holding the implementation_lock. Null if no active lease found (indicates stale registry)."
+        },
+        "lease_health": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "0.0-1.0. Computed as: max(0, 1 - heartbeat_age_seconds / ttl_seconds). 1.0 = perfectly fresh heartbeat. 0.0 = expired or no heartbeat."
+        },
+        "heartbeat_age_seconds": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "Seconds since the last TASK_HEARTBEAT or LEASE_RENEWED event for this task's implementation_lock."
+        },
+        "expires_in_seconds": {
+          "type": ["number", "null"],
+          "description": "Seconds until the active lease expires. Negative values indicate the lease has already expired but not been collected."
+        },
+        "ttl_seconds": {
+          "type": "number",
+          "description": "Lock TTL for this task's current role (21600 for IMPLEMENTATION, 7200 for REFACTOR)."
+        }
+      }
+    }
+  }
+}

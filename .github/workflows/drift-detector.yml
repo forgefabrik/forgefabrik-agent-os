@@ -1,0 +1,404 @@
+name: Drift Prevention (Single Truth Validator)
+
+# Detects when a second source of truth emerges in the repository.
+#
+# All rules are loaded from .task-locks/drift-rules.yaml.
+# This workflow contains NO hardcoded patterns, paths, or logic.
+# It is a pure rule-runner: load rules → grep → report.
+#
+# DETECTOR TYPES:
+#   Type A — State Leakage:     hard fail  (parallel state store found by filename)
+#   Type B — Logic Duplication: hard fail  (state machine logic outside transitions.yaml)
+#   Type C — Spec Drift:        warning    (document acting as shadow specification)
+#   Type D — Shadow System:     hard fail  (rule-combination drift — code + docs)
+#
+# AUTHORITY:
+#   This workflow does NOT interpret architecture, derive state, or modify any file.
+#   It only proves the absence of a second truth source.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  issues: write    # required for Type C escalation (gh issue create)
+
+jobs:
+  drift-detect:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rule parser (js-yaml)
+        run: npm install js-yaml --prefix /tmp/drift-tools
+
+      # -----------------------------------------------------------------------
+      # TYPE A — State Leakage (hard fail)
+      # A file exists that stores task/agent state independently of registry.json.
+      # Rules source: type_a_state_leakage in drift-rules.yaml
+      # -----------------------------------------------------------------------
+      - name: Type A — State Leakage (hard fail)
+        run: |
+          node - <<'SCRIPT'
+          const fs   = require('fs');
+          const yaml = require('/tmp/drift-tools/node_modules/js-yaml');
+          const { execSync } = require('child_process');
+
+          const rules = yaml.load(fs.readFileSync('.task-locks/drift-rules.yaml', 'utf8'));
+          const { forbidden_name_patterns, exceptions } = rules.type_a_state_leakage;
+
+          const violations = [];
+
+          for (const pattern of forbidden_name_patterns) {
+            let out = '';
+            try {
+              out = execSync(
+                `find . -name "${pattern}" -not -path "./.git/*" -not -path "./target/*"`,
+                { encoding: 'utf8' }
+              ).trim();
+            } catch (_) {}
+
+            if (!out) continue;
+
+            for (const rawPath of out.split('\n').filter(Boolean)) {
+              const normalized = rawPath.replace(/^\.\//, '');
+              if (!exceptions.includes(normalized)) {
+                violations.push(normalized);
+              }
+            }
+          }
+
+          if (violations.length > 0) {
+            console.error('❌ TYPE A — State Leakage:');
+            console.error('   A file exists that stores state outside registry.json.');
+            console.error('   Remove it or add it to the exceptions list in drift-rules.yaml');
+            console.error('   if it is genuinely part of the authoritative truth sources.');
+            violations.forEach(v => console.error(`   ${v}`));
+            process.exit(1);
+          }
+
+          console.log('✓ Type A clean — no parallel state stores detected.');
+          SCRIPT
+
+      # -----------------------------------------------------------------------
+      # TYPE B — Logic Duplication (hard fail)
+      # State-transition logic found outside transitions.yaml.
+      # Split into two independent passes to avoid mixed-context false positives:
+      #   code pass  — compiled/interpreted source files (regex, case-sensitive)
+      #   docs pass  — Markdown files (literal, case-insensitive)
+      # Rules source: type_b_logic_duplication in drift-rules.yaml
+      # -----------------------------------------------------------------------
+      - name: Type B — Logic Duplication (hard fail)
+        run: |
+          node - <<'SCRIPT'
+          const fs   = require('fs');
+          const yaml = require('/tmp/drift-tools/node_modules/js-yaml');
+          const { execSync } = require('child_process');
+
+          const rules = yaml.load(fs.readFileSync('.task-locks/drift-rules.yaml', 'utf8'));
+          const { code_targets, docs_targets, exclude_paths } = rules.type_b_logic_duplication;
+
+          // Shared exclusion flags (same for both passes).
+          const excludeDirFlags = exclude_paths
+            .filter(p => p.endsWith('/'))
+            .map(p => `--exclude-dir="${p.replace(/\/$/, '')}"`)
+            .join(' ');
+          const excludeFileFlags = exclude_paths
+            .filter(p => !p.endsWith('/'))
+            .map(p => `--exclude="${p}"`)
+            .join(' ');
+          const sharedExclude = `${excludeDirFlags} ${excludeFileFlags} --exclude-dir=.git`;
+
+          const violations = [];
+
+          // --- CODE PASS (case-sensitive, extended regex) ---
+          const codeIncludes = code_targets.extensions.map(e => `--include="${e}"`).join(' ');
+          for (const pattern of code_targets.forbidden_patterns) {
+            let out = '';
+            try {
+              out = execSync(
+                `grep -rn ${codeIncludes} ${sharedExclude} -E "${pattern}" . 2>/dev/null || true`,
+                { encoding: 'utf8' }
+              ).trim();
+            } catch (_) {}
+            if (out) violations.push({ context: 'code', pattern, matches: out.split('\n').slice(0, 5) });
+          }
+
+          // --- DOCS PASS (case-insensitive, literal) ---
+          const docsIncludes = docs_targets.extensions.map(e => `--include="${e}"`).join(' ');
+          for (const pattern of docs_targets.forbidden_patterns) {
+            let out = '';
+            try {
+              out = execSync(
+                `grep -rni ${docsIncludes} ${sharedExclude} "${pattern}" . 2>/dev/null || true`,
+                { encoding: 'utf8' }
+              ).trim();
+            } catch (_) {}
+            if (out) violations.push({ context: 'docs', pattern, matches: out.split('\n').slice(0, 5) });
+          }
+
+          if (violations.length > 0) {
+            console.error('❌ TYPE B — Logic Duplication:');
+            console.error('   State-transition logic found outside transitions.yaml.');
+            console.error('   Move this logic to .task-locks/transitions.yaml.');
+            for (const v of violations) {
+              console.error(`   [${v.context}] Pattern: "${v.pattern}"`);
+              for (const m of v.matches) console.error(`     ${m}`);
+            }
+            process.exit(1);
+          }
+
+          console.log('✓ Type B clean — no parallel logic engines detected (code + docs checked).');
+          SCRIPT
+
+      # -----------------------------------------------------------------------
+      # TYPE C — Spec Drift (warning + escalation, never fails the build)
+      # A document describes system behaviour authoritatively outside the
+      # declared truth sources (shadow specification).
+      #
+      # ESCALATION: If drift is detected AND escalation.create_issue is true
+      # in drift-rules.yaml, a GitHub issue is created with the configured label.
+      # This prevents warnings from silently accumulating into shadow authority.
+      # Duplicate open issues (same title + label) are skipped.
+      #
+      # Rules source: type_c_spec_drift in drift-rules.yaml
+      # -----------------------------------------------------------------------
+      - name: Type C — Spec Drift (warning + escalation)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node - <<'SCRIPT'
+          const fs   = require('fs');
+          const yaml = require('/tmp/drift-tools/node_modules/js-yaml');
+          const { execSync } = require('child_process');
+
+          const rules = yaml.load(fs.readFileSync('.task-locks/drift-rules.yaml', 'utf8'));
+          const { patterns, file_extensions, exclude_paths, escalation } = rules.type_c_spec_drift;
+
+          const includeFlags = file_extensions.map(e => `--include="${e}"`).join(' ');
+          const excludeFileFlags = (exclude_paths || []).map(p => `--exclude="${p}"`).join(' ');
+
+          const warnings = [];
+
+          for (const pattern of patterns) {
+            let out = '';
+            try {
+              out = execSync(
+                `grep -rni ${includeFlags} ${excludeFileFlags}` +
+                ` --exclude-dir=.git "${pattern}" . 2>/dev/null || true`,
+                { encoding: 'utf8' }
+              ).trim();
+            } catch (_) {}
+            if (out) warnings.push({ pattern, matches: out.split('\n').slice(0, 3) });
+          }
+
+          if (warnings.length === 0) {
+            console.log('✓ Type C clean — no spec drift detected.');
+            process.exit(0);
+          }
+
+          // Report findings.
+          console.log('⚠️  TYPE C — Spec Drift (non-blocking):');
+          console.log('   Documents found that may be acting as shadow specifications.');
+          console.log('   Consider whether these docs duplicate logic from transitions.yaml.');
+          for (const w of warnings) {
+            console.log(`   Pattern: "${w.pattern}"`);
+            for (const m of w.matches) console.log(`     ${m}`);
+          }
+
+          // Escalation hook — read config from rules file, not hardcoded here.
+          if (!escalation || !escalation.create_issue) {
+            process.exit(0);
+          }
+
+          const label = escalation.label || 'architecture-drift';
+          const issueTitle = 'Type C: Spec Drift Detected';
+
+          // Deduplication: skip if an open issue with this label+title already exists.
+          try {
+            const listOut = execSync(
+              `gh issue list --label "${label}" --state open --json number,title`,
+              { encoding: 'utf8' }
+            ).trim();
+            const existing = JSON.parse(listOut || '[]');
+            if (existing.some(i => i.title === issueTitle)) {
+              console.log(`⚠️  Escalation: open issue already exists (label '${label}'). Skipping.`);
+              process.exit(0);
+            }
+          } catch (_) {}
+
+          // Build issue body from findings.
+          const matchLines = warnings.map(w =>
+            `**Pattern:** \`${w.pattern}\`\n` +
+            w.matches.map(m => `- \`${m.trim()}\``).join('\n')
+          ).join('\n\n');
+
+          const body = [
+            '## Spec Drift Detected (Type C)',
+            '',
+            'The following documentation patterns were found that may indicate a shadow specification.',
+            'Review these files and confirm no policy logic has migrated from `transitions.yaml` into docs.',
+            '',
+            '### Matches',
+            matchLines,
+            '',
+            '### Resolution',
+            '- Remove the spec-like language from the document, OR',
+            '- Confirm it is documentation-only and close this issue with a brief explanation.',
+          ].join('\n');
+
+          // Write body to file to avoid shell escaping issues.
+          fs.writeFileSync('/tmp/type-c-issue.md', body);
+
+          try {
+            execSync(
+              `gh issue create --title "${issueTitle}" --body-file /tmp/type-c-issue.md --label "${label}"`,
+              { encoding: 'utf8' }
+            );
+            console.log(`✓ Escalation: GitHub issue created with label '${label}'.`);
+          } catch (e) {
+            console.log(`⚠️  Escalation: issue creation failed (${e.message}). Continuing.`);
+          }
+
+          // Type C never fails the build regardless of escalation outcome.
+          process.exit(0);
+          SCRIPT
+
+      # -----------------------------------------------------------------------
+      # TYPE D — Shadow System / Rule-Combination Detector (hard fail)
+      # Detects files that combine multiple forbidden behaviors, implying they
+      # are forming a second system of truth.
+      #
+      # Logic (purely mechanical — no world-model built):
+      #   For each candidate file:
+      #     For each rule_class: does ANY pattern in this class match? → +1 hit
+      #     If total hits >= threshold.min_hits → DRIFT → hard fail
+      #
+      # A rule_class hit = at least one pattern in that class matched.
+      # Threshold crossing = file is combining behaviors from independent categories.
+      #
+      # Rules source: type_d_shadow_system in drift-rules.yaml
+      # -----------------------------------------------------------------------
+      - name: Type D — Shadow System (hard fail)
+        run: |
+          node - <<'SCRIPT'
+          const fs   = require('fs');
+          const yaml = require('/tmp/drift-tools/node_modules/js-yaml');
+          const { execSync } = require('child_process');
+
+          const rules = yaml.load(fs.readFileSync('.task-locks/drift-rules.yaml', 'utf8'));
+          const { rule_classes, threshold, scope, exclude_paths } = rules.type_d_shadow_system;
+          const minHits = threshold.min_hits;
+
+          // Build candidate file list from scope.extensions.
+          const nameArgs = scope.extensions.map(e => `-name "${e}"`).join(' -o ');
+          let allFiles = [];
+          try {
+            allFiles = execSync(
+              `find . -type f \\( ${nameArgs} \\) -not -path "./.git/*" -not -path "./target/*"`,
+              { encoding: 'utf8' }
+            ).trim().split('\n').filter(Boolean)
+              .map(f => f.replace(/^\.\//, ''));
+          } catch (_) {}
+
+          const candidates = allFiles.filter(f =>
+            !exclude_paths.some(exc => exc.endsWith('/') ? f.startsWith(exc) : f === exc)
+          );
+
+          const violations = [];
+
+          for (const file of candidates) {
+            let hits = 0;
+            const hitClasses = [];
+
+            // Per rule_class: +1 hit if ANY pattern in the class matches.
+            for (const [className, patterns] of Object.entries(rule_classes)) {
+              let classHit = false;
+              for (const pattern of patterns) {
+                try {
+                  const result = execSync(
+                    `grep -En "${pattern}" "${file}" 2>/dev/null | head -1 || true`,
+                    { encoding: 'utf8' }
+                  ).trim();
+                  if (result) { classHit = true; break; }
+                } catch (_) {}
+              }
+              if (classHit) { hits++; hitClasses.push(className); }
+            }
+
+            if (hits >= minHits) {
+              violations.push({ file, classes: hitClasses, hits });
+            }
+          }
+
+          if (violations.length > 0) {
+            console.error('❌ TYPE D — Rule-Combination Drift:');
+            console.error(
+              `   A file matches patterns from ${minHits}+ independent rule classes,`
+            );
+            console.error('   indicating it may be combining multiple forbidden behaviors.');
+            for (const v of violations) {
+              console.error(`   ${v.file}`);
+              console.error(`     rule classes matched: ${v.classes.join(' + ')}`);
+            }
+            process.exit(1);
+          }
+
+          console.log(
+            `✓ Type D clean — no rule-combination drift (${candidates.length} files scanned).`
+          );
+          SCRIPT
+
+      # -----------------------------------------------------------------------
+      # TYPE E - Markdown Authority (hard fail)
+      # CI workflows must not read documentation-only Markdown as operational
+      # input. Rules source: type_e_markdown_authority in drift-rules.yaml.
+      # -----------------------------------------------------------------------
+      - name: Type E - Markdown Authority (hard fail)
+        run: |
+          node - <<'SCRIPT'
+          const fs   = require('fs');
+          const yaml = require('/tmp/drift-tools/node_modules/js-yaml');
+          const { execSync } = require('child_process');
+
+          const rules = yaml.load(fs.readFileSync('.task-locks/drift-rules.yaml', 'utf8'));
+          const { scope, forbidden_paths, exclude_paths } = rules.type_e_markdown_authority;
+
+          const nameArgs = scope.extensions.map(e => `-name "${e}"`).join(' -o ');
+          let allFiles = [];
+          try {
+            allFiles = execSync(
+              `find . -type f \\( ${nameArgs} \\) -not -path "./.git/*" -not -path "./target/*"`,
+              { encoding: 'utf8' }
+            ).trim().split('\n').filter(Boolean)
+              .map(f => f.replace(/^\.\//, ''));
+          } catch (_) {}
+
+          const candidates = allFiles.filter(f =>
+            !exclude_paths.some(exc => exc.endsWith('/') ? f.startsWith(exc) : f === exc)
+          );
+
+          const violations = [];
+          for (const file of candidates) {
+            const text = fs.readFileSync(file, 'utf8');
+            for (const forbidden of forbidden_paths) {
+              if (text.includes(forbidden)) {
+                violations.push({ file, forbidden });
+              }
+            }
+          }
+
+          if (violations.length > 0) {
+            console.error('TYPE E - Markdown Authority:');
+            console.error('   CI workflow files reference documentation-only Markdown as operational input.');
+            console.error('   Task existence and state must come from .task-locks/registry.json.');
+            for (const v of violations) {
+              console.error(`   ${v.file}: ${v.forbidden}`);
+            }
+            process.exit(1);
+          }
+
+          console.log(`Type E clean - no workflow reads documentation-only task Markdown (${candidates.length} files scanned).`);
+          SCRIPT

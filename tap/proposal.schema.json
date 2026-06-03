@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "schema_version=1.0.0 | TAP suggestion output schema",
+  "title": "TAP Suggestion",
+  "type": "object",
+  "required": ["mode", "generated_at", "tasks", "top_priority_task", "anomalies", "summary"],
+  "properties": {
+    "mode":              { "type": "string", "enum": ["observe", "suggest"] },
+    "generated_at":      { "type": ["string", "null"] },
+    "world_snapshot":    { "type": ["string", "null"] },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task_id", "risk", "recommendation"],
+        "properties": {
+          "task_id":       { "type": "string" },
+          "risk":          { "type": "string", "enum": ["low", "medium", "high"] },
+          "recommendation": { "type": "string" },
+          "bottleneck":    { "type": "boolean" }
+        }
+      }
+    },
+    "top_priority_task": { "type": ["string", "null"] },
+    "anomalies":         { "type": "array", "items": { "type": "string" } },
+    "summary":           { "type": "string" }
+  }
+}

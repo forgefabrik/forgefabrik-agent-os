@@ -1,0 +1,382 @@
+name: Event Log Integrity
+
+# Enforces the append-only invariant on TASK_EVENTS.jsonl.
+#
+# INVARIANT: every line that exists in TASK_EVENTS.jsonl on the base branch
+# must still exist at the same position in the working branch — unchanged.
+# New lines may only be added at the end.
+#
+# This check runs on:
+#   - pull_request: any PR that touches TASK_EVENTS.jsonl
+#   - push to main: catches force-push and squash-merge rewrites
+#
+# Hard fail conditions:
+#   - Any existing event line was edited or deleted
+#   - Event indices are not monotonically increasing
+#   - event_index does not match the physical line number
+#   - engine_version in new events does not match transitions.yaml
+#   - Any event line fails event.schema.json validation
+#   - Force push rewrote existing event history (push trigger only)
+#
+# Why this matters:
+#   The event log is the source of truth for all task state.
+#   Any edit or deletion silently corrupts state — the projection
+#   builder would derive a different (wrong) registry from a modified log.
+#   There is no recovery path other than restoring from git history.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'TASK_EVENTS.jsonl'
+
+  push:
+    branches: [main]
+    paths:
+      - 'TASK_EVENTS.jsonl'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # JOB 1: PR integrity — new lines must be an append, not a rewrite
+  # ---------------------------------------------------------------------------
+  pr-append-only:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history needed to compare base and head versions.
+          fetch-depth: 0
+
+      - name: Install js-yaml + ajv
+        run: npm install js-yaml ajv ajv-formats --prefix /tmp/nova-event-check
+
+      - name: Extract base event log
+        run: |
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          git show "${BASE_SHA}:TASK_EVENTS.jsonl" > /tmp/base-events.jsonl 2>/dev/null || \
+            echo "" > /tmp/base-events.jsonl
+          echo "Base events: $(wc -l < /tmp/base-events.jsonl | tr -d ' ') lines"
+
+      - name: Assert append-only invariant
+        run: |
+          node - <<'SCRIPT'
+          const fs = require('fs');
+
+          const baseRaw = fs.readFileSync('/tmp/base-events.jsonl', 'utf8');
+          const headRaw = fs.readFileSync('TASK_EVENTS.jsonl', 'utf8');
+
+          // Split into non-empty lines.
+          const baseLines = baseRaw.trim() === '' ? [] : baseRaw.trim().split('\n');
+          const headLines = headRaw.trim() === '' ? [] : headRaw.trim().split('\n');
+
+          const errors = [];
+
+          // RULE 1: head must have at least as many lines as base.
+          if (headLines.length < baseLines.length) {
+            errors.push(
+              `DELETION DETECTED: base has ${baseLines.length} events, ` +
+              `head has ${headLines.length}. ` +
+              `${baseLines.length - headLines.length} event(s) were removed.`
+            );
+          }
+
+          // RULE 2: every existing base line must be identical at the same position.
+          const compareCount = Math.min(baseLines.length, headLines.length);
+          for (let i = 0; i < compareCount; i++) {
+            if (baseLines[i] !== headLines[i]) {
+              // Parse both to give a useful diff.
+              let baseEv, headEv;
+              try { baseEv = JSON.parse(baseLines[i]); } catch(_) { baseEv = { raw: baseLines[i] }; }
+              try { headEv = JSON.parse(headLines[i]); } catch(_) { headEv = { raw: headLines[i] }; }
+
+              errors.push(
+                `EDIT DETECTED at line ${i + 1} (event_index=${baseEv.event_index ?? '?'}):\n` +
+                `  Base: ${JSON.stringify(baseEv)}\n` +
+                `  Head: ${JSON.stringify(headEv)}`
+              );
+            }
+          }
+
+          if (errors.length > 0) {
+            console.error('');
+            console.error('════════════════════════════════════════════════════════════');
+            console.error('  APPEND-ONLY INVARIANT VIOLATED');
+            console.error('════════════════════════════════════════════════════════════');
+            console.error('');
+            console.error('TASK_EVENTS.jsonl is the source of truth for all task state.');
+            console.error('Editing or deleting events silently corrupts the projection.');
+            console.error('');
+            for (const err of errors) console.error('  ❌ ' + err);
+            console.error('');
+            console.error('To fix: restore the original event lines from git history.');
+            console.error('  git show origin/main:TASK_EVENTS.jsonl > TASK_EVENTS.jsonl');
+            console.error('  # then re-append only the new events you intended to add');
+            process.exit(1);
+          }
+
+          const appended = headLines.length - baseLines.length;
+          console.log(`✓ Append-only invariant satisfied: ${appended} new event(s) appended.`);
+          SCRIPT
+
+      - name: Validate new events against event.schema.json
+        run: |
+          node - <<'SCRIPT'
+          const fs   = require('fs');
+          const yaml = require('/tmp/nova-event-check/node_modules/js-yaml');
+          const Ajv  = require('/tmp/nova-event-check/node_modules/ajv');
+          const addFormats = require('/tmp/nova-event-check/node_modules/ajv-formats');
+
+          const baseRaw = fs.readFileSync('/tmp/base-events.jsonl', 'utf8');
+          const headRaw = fs.readFileSync('TASK_EVENTS.jsonl', 'utf8');
+
+          const baseLines = baseRaw.trim() === '' ? [] : baseRaw.trim().split('\n');
+          const headLines = headRaw.trim() === '' ? [] : headRaw.trim().split('\n');
+
+          // Validate only NEW lines (those beyond the base).
+          const newLines = headLines.slice(baseLines.length);
+          if (newLines.length === 0) {
+            console.log('No new events to validate.');
+            process.exit(0);
+          }
+
+          const schema      = JSON.parse(fs.readFileSync('.task-locks/event.schema.json', 'utf8'));
+          const transitions = yaml.load(fs.readFileSync('.task-locks/transitions.yaml', 'utf8'));
+          const ENGINE_VER  = transitions.engine_version;
+
+          const ajv = new Ajv({ allErrors: true });
+          addFormats(ajv);
+          const validate = ajv.compile(schema);
+
+          let errors = 0;
+
+          for (let i = 0; i < newLines.length; i++) {
+            const lineNum = baseLines.length + i + 1;
+            const expectedIndex = baseLines.length + i;
+
+            let ev;
+            try {
+              ev = JSON.parse(newLines[i]);
+            } catch (e) {
+              console.error(`Line ${lineNum}: JSON parse error: ${e.message}`);
+              errors++;
+              continue;
+            }
+
+            // event_index must equal physical line number - 1 (0-based).
+            if (ev.event_index !== expectedIndex) {
+              console.error(
+                `Line ${lineNum}: event_index mismatch — expected ${expectedIndex}, got ${ev.event_index}`
+              );
+              errors++;
+            }
+
+            // engine_version must match transitions.yaml.
+            if (ev.engine_version !== ENGINE_VER) {
+              console.error(
+                `Line ${lineNum} (event_index=${ev.event_index}): engine_version mismatch — ` +
+                `event has ${ev.engine_version}, transitions.yaml has ${ENGINE_VER}`
+              );
+              errors++;
+            }
+
+            // Schema validation.
+            if (!validate(ev)) {
+              console.error(`Line ${lineNum} (event_index=${ev.event_index}): schema validation failed:`);
+              for (const err of validate.errors) {
+                console.error(`  ${err.instancePath || '(root)'}: ${err.message}`);
+              }
+              errors++;
+            }
+          }
+
+          if (errors > 0) {
+            console.error(`\n❌ ${errors} error(s) in new events. Fix before merging.`);
+            process.exit(1);
+          }
+
+          console.log(`✓ ${newLines.length} new event(s) are valid.`);
+          SCRIPT
+
+      - name: Post failure comment on PR
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner:        context.repo.owner,
+              repo:         context.repo.repo,
+              issue_number: context.issue.number,
+              body: [
+                '## ❌ Event Log Integrity Check Failed',
+                '',
+                '`TASK_EVENTS.jsonl` is the **append-only source of truth** for all task state.',
+                'Editing or deleting existing events corrupts the projection.',
+                '',
+                '**To fix:**',
+                '```bash',
+                '# Restore the original event lines from the base branch',
+                'git show origin/main:TASK_EVENTS.jsonl > TASK_EVENTS.jsonl',
+                '# Then re-append only the new events you intended to add',
+                '```',
+                '',
+                'See `.task-locks/transitions.yaml` for valid event types.',
+                'See `.task-locks/event.schema.json` for the event format.',
+              ].join('\n')
+            });
+
+  # ---------------------------------------------------------------------------
+  # JOB 2: Push-to-main integrity — catches force-push and squash-merge rewrites
+  # ---------------------------------------------------------------------------
+  push-rewrite-check:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for force-push rewrite
+        run: |
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.event.after }}"
+
+          # The all-zeros SHA means this is a new branch push — no history to compare.
+          if [ "${BEFORE}" = "0000000000000000000000000000000000000000" ]; then
+            echo "New branch push — skipping rewrite check."
+            exit 0
+          fi
+
+          # Extract TASK_EVENTS.jsonl from the before-push commit.
+          git show "${BEFORE}:TASK_EVENTS.jsonl" > /tmp/before-events.jsonl 2>/dev/null || {
+            echo "TASK_EVENTS.jsonl did not exist before this push — skipping rewrite check."
+            exit 0
+          }
+
+          node - <<'SCRIPT'
+          const fs = require('fs');
+
+          const beforeRaw = fs.readFileSync('/tmp/before-events.jsonl', 'utf8');
+          const afterRaw  = fs.readFileSync('TASK_EVENTS.jsonl', 'utf8');
+
+          const beforeLines = beforeRaw.trim() === '' ? [] : beforeRaw.trim().split('\n');
+          const afterLines  = afterRaw.trim()  === '' ? [] : afterRaw.trim().split('\n');
+
+          // If we have fewer lines after the push, events were deleted.
+          if (afterLines.length < beforeLines.length) {
+            console.error('');
+            console.error('════════════════════════════════════════════════════════════');
+            console.error('  FORCE-PUSH REWRITE DETECTED');
+            console.error('════════════════════════════════════════════════════════════');
+            console.error('');
+            console.error(`Before: ${beforeLines.length} events`);
+            console.error(`After:  ${afterLines.length} events`);
+            console.error(`Lost:   ${beforeLines.length - afterLines.length} event(s)`);
+            console.error('');
+            console.error('This push rewrote event history. This is FORBIDDEN.');
+            console.error('The event log is append-only. Lost events cannot be recovered.');
+            console.error('');
+            console.error('REQUIRED ACTION: Revert this push immediately.');
+            console.error('  git push --force origin <previous-sha>:main');
+            process.exit(1);
+          }
+
+          // All pre-push lines must be unchanged.
+          const errors = [];
+          for (let i = 0; i < beforeLines.length; i++) {
+            if (beforeLines[i] !== afterLines[i]) {
+              let bEv, aEv;
+              try { bEv = JSON.parse(beforeLines[i]); } catch(_) { bEv = { raw: beforeLines[i] }; }
+              try { aEv = JSON.parse(afterLines[i]);  } catch(_) { aEv = { raw: afterLines[i]  }; }
+              errors.push(
+                `Line ${i + 1} (event_index=${bEv.event_index ?? '?'}) was modified:\n` +
+                `  Before: ${JSON.stringify(bEv)}\n` +
+                `  After:  ${JSON.stringify(aEv)}`
+              );
+            }
+          }
+
+          if (errors.length > 0) {
+            console.error('');
+            console.error('════════════════════════════════════════════════════════════');
+            console.error('  EVENT HISTORY REWRITE DETECTED (squash / rebase / edit)');
+            console.error('════════════════════════════════════════════════════════════');
+            console.error('');
+            for (const err of errors) console.error('  ❌ ' + err);
+            console.error('');
+            console.error('REQUIRED ACTION: Revert this push immediately.');
+            process.exit(1);
+          }
+
+          const appended = afterLines.length - beforeLines.length;
+          console.log(`✓ Push integrity verified: ${appended} new event(s) appended, none modified.`);
+          SCRIPT
+
+      - name: Validate event index continuity after push
+        run: |
+          node - <<'SCRIPT'
+          const fs = require('fs');
+
+          const raw = fs.readFileSync('TASK_EVENTS.jsonl', 'utf8').trim();
+          if (!raw) process.exit(0);
+
+          const lines = raw.split('\n');
+          let errors = 0;
+
+          for (let i = 0; i < lines.length; i++) {
+            let ev;
+            try { ev = JSON.parse(lines[i]); } catch(e) {
+              console.error(`Line ${i + 1}: JSON parse error: ${e.message}`);
+              errors++;
+              continue;
+            }
+            if (ev.event_index !== i) {
+              console.error(`Line ${i + 1}: event_index gap — expected ${i}, got ${ev.event_index}`);
+              errors++;
+            }
+          }
+
+          if (errors > 0) {
+            console.error(`❌ ${errors} event_index error(s) detected.`);
+            process.exit(1);
+          }
+          console.log(`✓ All ${lines.length} event indices are contiguous.`);
+          SCRIPT
+
+  # ---------------------------------------------------------------------------
+  # JOB 3: Branch protection advisory
+  # Reminds maintainers to enable GitHub branch protection rules that
+  # complement these CI checks at the platform level.
+  # ---------------------------------------------------------------------------
+  branch-protection-reminder:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify recommended branch protections are configured
+        uses: actions/github-script@v6
+        with:
+          script: |
+            // This step does not block — it is advisory only.
+            // Platform-level enforcement (no force-push, require linear history,
+            // require PR before merging) must be configured in GitHub repo settings:
+            //
+            //   Settings → Branches → Branch protection rules → main:
+            //     ✓ Require a pull request before merging
+            //     ✓ Require status checks to pass (include: Event Log Integrity)
+            //     ✓ Do not allow bypassing the above settings
+            //     ✓ Restrict who can push to matching branches
+            //     ✗ Allow force pushes  (must be DISABLED)
+            //     ✗ Allow deletions     (must be DISABLED)
+            //
+            // These CI checks catch violations AFTER the fact.
+            // Branch protection rules prevent them BEFORE the push.
+            core.info(
+              'Advisory: Ensure branch protection for main is configured.\n' +
+              'Force push and deletion must be disabled at the repository level.\n' +
+              'CI checks alone cannot block a force push by a repo admin.'
+            );

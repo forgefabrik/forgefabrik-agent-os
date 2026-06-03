@@ -1,0 +1,36 @@
+{
+  "$comment": "World configuration — global parameters for the event-os-core system.",
+  "schema_version": "1.0.0",
+
+  "system_name": "event-os-core",
+  "engine_version": 1,
+
+  "event_log":  "TASK_EVENTS.jsonl",
+  "engine_dir": ".task-locks",
+
+  "api": {
+    "host": "127.0.0.1",
+    "port": 7337
+  },
+
+  "llm": {
+    "endpoint": "http://localhost:1234/v1/chat/completions",
+    "default_model": "Qwen3-Zero-Coder-Reasoning-V2-0.8B-NEO-EX-IQ4_XS",
+    "creative_model": "Qwen3-Zero-Coder-Reasoning-V2-0.8B-NEO-EX-IQ3_M",
+    "temperature": 0.05,
+    "creative_temperature": 0.35,
+    "max_tokens": 1024,
+    "authority": "planning_only"
+  },
+
+  "tap": {
+    "mode": "observe",
+    "auto_analyze": false,
+    "output_path": "tap/suggestions.json"
+  },
+
+  "scheduler": {
+    "watch_mode": false,
+    "rebuild_on_event": true
+  }
+}

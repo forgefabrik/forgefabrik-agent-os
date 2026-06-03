@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0.0",
+  "scheduler_sequence": 7,
+  "registry_event_count": 3,
+  "event_head_hash": "c548b6c5097f8c61dab9970f87f2d8ec641eca54590dd88b76617a2f496d3e3d",
+  "registry_snapshot_index": 1,
+  "world_snapshot": {
+    "event_head_hash": "c548b6c5097f8c61dab9970f87f2d8ec641eca54590dd88b76617a2f496d3e3d",
+    "head_event_index": 2,
+    "registry_hash": "5bc5b0af3936c419b16d128f8139919a2282f9376321901271c7b105ec32de34",
+    "agent_registry_hash": "0e97bab0569dd7837b549be0c25326729a44405221cde239d5a5a89b870dc764",
+    "leases_hash": "546dac82175f53cc564faf183c2cf25c2a793be6d53692331011bafdb3c2d34d",
+    "policy_hash": "f7849d7f51000959c56f8a37c8f1c9a5c16a47aba932120baeea6aeaacc9ee81",
+    "world_snapshot_hash": "08fb5e723153ec3001d277e15ad7cb3087ee61ac51ff772e91b3cc663e84c61a"
+  },
+  "generated_at": "2026-06-03T11:01:19Z",
+  "queue_count": 42,
+  "monitored_count": 0,
+  "excluded_count": 0,
+  "terminal_count": 0,
+  "trust_status": "verified",
+  "warnings": [
+    "no_agents_registered",
+    "some_tasks_have_no_candidates"
+  ],
+  "errors": []
+}

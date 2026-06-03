@@ -1,0 +1,6 @@
+{
+  "$comment": "Active agent leases — maintained by lease-manager.mjs. Never edit manually.",
+  "schema_version": "1.0.0",
+  "generated_at": null,
+  "leases": []
+}

@@ -1,0 +1,52 @@
+{
+  "$comment": "Model manifest for TAP/LLM operations. LLMs are planning-only and never authoritative for scheduler scoring, bridge validation, leases, or event writes.",
+  "schema_version": "2.0.0",
+
+  "models": [
+    {
+      "id": "Qwen3-Zero-Coder-Reasoning-V2-0.8B-NEO-EX-IQ4_XS",
+      "description": "Default TAP core brain. Stable 0.8B reasoning model for idea-to-architecture compilation, bounded planning, task decomposition proposals, and local CI agent assistance.",
+      "pull_cmd": "llmster pull Qwen3-Zero-Coder-Reasoning-V2-0.8B-NEO-EX-IQ4_XS",
+      "size_mb": 800,
+      "quantization": "IQ4_XS",
+      "temperature": 0.05,
+      "use_case": "tap_core_brain, idea_to_architecture, deterministic_structured_planning",
+      "authority": "planning_only",
+      "default": true
+    },
+    {
+      "id": "Qwen3-Zero-Coder-Reasoning-V2-0.8B-NEO-EX-IQ3_M",
+      "description": "Optional TAP exploration model. Faster and more exploratory; may suggest unusual architectures but must not feed replay-critical decisions directly.",
+      "pull_cmd": "llmster pull Qwen3-Zero-Coder-Reasoning-V2-0.8B-NEO-EX-IQ3_M",
+      "size_mb": 650,
+      "quantization": "IQ3_M",
+      "temperature": 0.35,
+      "use_case": "idea_generation, exploration_mode",
+      "authority": "planning_only",
+      "default": false
+    }
+  ],
+
+  "forbidden_for_system_default": [
+    "Q8",
+    "F16",
+    "IQ2_*"
+  ],
+
+  "authority_boundary": {
+    "llm_allowed": [
+      "idea normalization",
+      "architecture proposal",
+      "task graph proposal",
+      "bid intent normalization",
+      "explanation"
+    ],
+    "llm_forbidden": [
+      "scheduler scoring authority",
+      "bridge validation",
+      "lease acquisition",
+      "direct TASK_EVENTS writes",
+      "direct task creation outside architecture projection"
+    ]
+  }
+}

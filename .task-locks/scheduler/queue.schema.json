@@ -1,0 +1,71 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://nova25/task-locks/scheduler/queue.schema.json",
+  "$comment": "schema_version=1.0.0 | Added 2026-06-03 | Scheduler Layer. Format for scheduler/queue.json. Never edited manually.",
+  "title": "NOVA 2.5 Scheduler Queue",
+  "description": "Output of scheduler.mjs. Scored, ordered list of tasks that can be assigned to agents. Each entry includes score component breakdown (explainability) and a ranked candidate list. Snapshot-bound: tied to a specific registry event count and event head hash.",
+  "type": "object",
+  "required": ["schema_version", "scheduler_sequence", "registry_event_count", "event_head_hash", "generated_at", "queue"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version":          { "type": "string", "const": "1.0.0" },
+    "scheduler_sequence":      { "type": "integer", "minimum": 0, "description": "Monotonically increasing run counter. Incremented on each scheduler.mjs execution." },
+    "registry_event_count":    { "type": "integer", "minimum": 0, "description": "event_count of the registry.json snapshot used to produce this queue. Links the recommendation to a specific registry state." },
+    "event_head_hash":         { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$", "description": "event_hash of the HEAD event in TASK_EVENTS.jsonl at the time of this run. Allows consumers to detect if the queue is stale." },
+    "registry_snapshot_index": { "type": ["integer", "null"], "minimum": 0, "description": "Index of the latest SNAPSHOT_CREATED event consumed, if available." },
+    "generated_at":            { "type": "string", "format": "date-time" },
+    "queue": {
+      "type": "array",
+      "description": "Tasks ordered by score descending. Only schedulable states (per scheduler_policy.json) are included.",
+      "items": { "$ref": "#/definitions/queue_entry" }
+    }
+  },
+  "definitions": {
+    "queue_entry": {
+      "type": "object",
+      "required": ["task_id", "state", "needed_role", "score", "components", "candidates"],
+      "additionalProperties": false,
+      "properties": {
+        "task_id":     { "type": "string", "pattern": "^TASK-[0-9]{4,}(-[a-z])?$" },
+        "state":       { "type": "string", "enum": ["TODO", "REVIEW_LOCKED"] },
+        "needed_role": { "type": "string", "enum": ["IMPLEMENTATION", "REVIEW"] },
+        "score":       { "type": "number", "description": "Final composite score. Higher = schedule first." },
+        "components": {
+          "type": "object",
+          "description": "Fixed-point score factor breakdown. All normalized components are ∈ [0,1]. Canonical integer scores are used for sort/comparison; _display fields are human-readable only.",
+          "required": ["priority_multiplier", "urgency_norm", "dep_norm", "trust_norm", "cost_inv_norm", "within_score_fp", "final_score_fp"],
+          "additionalProperties": false,
+          "properties": {
+            "priority_multiplier": { "type": "integer", "enum": [1, 2, 4, 8], "description": "Discrete tier multiplier derived from task.priority_weight." },
+            "priority_tier":       { "type": "string",  "enum": ["P0", "P1", "P2", "P3"] },
+            "urgency_norm":        { "type": "number", "minimum": 0, "maximum": 1, "description": "Event-distance based urgency: min(1, (head_idx - last_event_idx) / halflife_events)." },
+            "dep_norm":            { "type": "number", "minimum": 0, "maximum": 1, "description": "Dependency pressure: min(1, blocked_count / max_dep_pressure)." },
+            "trust_norm":          { "type": "number", "minimum": 0, "maximum": 1, "description": "Best candidate fit_score: reputation × availability." },
+            "cost_inv_norm":       { "type": "number", "minimum": 0, "maximum": 1, "description": "log(2)/log(cost+1) — cheapest task = 1.0." },
+            "execution_cost":      { "type": "number", "description": "Raw Fibonacci cost value for reference." },
+            "within_score_fp":     { "type": "integer", "minimum": 0, "description": "floor(1e6 × (W_U×U + W_D×D + W_T×T + W_C×C)) — within-group integer score before priority multiplier." },
+            "final_score_fp":      { "type": "integer", "minimum": 0, "description": "within_score_fp × priority_multiplier — canonical comparison integer." }
+          }
+        },
+        "candidates": {
+          "type": "array",
+          "description": "Agents ranked by fit_score descending. May be empty if no capable agents are registered.",
+          "items": { "$ref": "#/definitions/candidate" }
+        },
+        "no_candidates_reason": {
+          "type": ["string", "null"],
+          "description": "Why candidates is empty, if applicable. E.g. 'no_agents_with_IMPLEMENTATION_capability'."
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "required": ["agent_id", "fit_score"],
+      "additionalProperties": false,
+      "properties": {
+        "agent_id":  { "type": "string" },
+        "fit_score": { "type": "number", "minimum": 0, "maximum": 1, "description": "0-1 composite fit: reputation_score × availability_factor." }
+      }
+    }
+  }
+}

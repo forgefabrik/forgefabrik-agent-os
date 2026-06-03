@@ -1,0 +1,7 @@
+{
+  "$comment": "Agent Runtime registry — rebuilt by agent-runtime.mjs from AGENT_REGISTERED events. Never edit manually.",
+  "schema_version": "1.0.0",
+  "generated_at": "2026-06-03T00:00:00Z",
+  "event_count": 0,
+  "agents": []
+}

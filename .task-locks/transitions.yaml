@@ -1,0 +1,203 @@
+# NOVA 2.5 — Task State Transition Engine
+#
+# This file is the SINGLE SOURCE OF TRUTH for all task state transitions.
+# NO CI script may duplicate or re-implement this logic.
+# CI workflows MUST reference this file — never replicate it.
+#
+# Pure function contract: (current_state, event_type) -> next_state
+# If a transition is not listed here, it is FORBIDDEN.
+#
+# engine_version pins this spec to the event log.
+# Replaying events with a mismatched engine_version is undefined behaviour.
+
+engine_version: 1
+spec_version: "1.0.0"
+updated: "2026-06-02"
+
+# ---------------------------------------------------------------------------
+# TERMINAL STATES
+# ---------------------------------------------------------------------------
+# MERGED and EXPIRED are terminal. No transitions out of them.
+# Re-claiming an EXPIRED task MUST create a new task fork via the canonical
+# fork function:   fork(task_id) -> task_id + next_suffix
+#   TASK-0042        -> TASK-0042-a
+#   TASK-0042-a      -> TASK-0042-b
+#   TASK-0042-b      -> TASK-0042-c
+# Nested suffixes (TASK-0042-a-a) are FORBIDDEN.
+# ---------------------------------------------------------------------------
+
+terminal_states:
+  - MERGED
+  - EXPIRED
+
+# ---------------------------------------------------------------------------
+# FORK SUFFIX RULE
+# ---------------------------------------------------------------------------
+fork_suffix_alphabet: "abcdefghijklmnopqrstuvwxyz"
+fork_nesting_max: 1   # suffix depth must never exceed 1
+
+# ---------------------------------------------------------------------------
+# STATE TRANSITIONS
+# ---------------------------------------------------------------------------
+
+transitions:
+  TODO:
+    TASK_CLAIMED:
+      next_state: IN_PROGRESS
+      allowed_roles: [IMPLEMENTATION]
+      lock_effect:
+        acquire: implementation_lock
+        ttl_seconds: 21600   # 6 hours
+
+  IN_PROGRESS:
+    TASK_HEARTBEAT:
+      next_state: IN_PROGRESS
+      allowed_roles: [IMPLEMENTATION]
+      lock_effect:
+        extend: implementation_lock
+        by_seconds: 21600
+
+    TASK_REVIEW_REQUESTED:
+      next_state: REVIEW_LOCKED
+      allowed_roles: [IMPLEMENTATION]
+      lock_effect:
+        # Implementation lock is NOT released here — REVIEW must accept it.
+        # REVIEW agent accepting the task atomically transfers ownership.
+        transfer: implementation_lock
+        to_role: REVIEW
+        acquire: review_lock
+        review_ttl_seconds: 3600   # 1 hour
+
+    TASK_REFACTOR_REQUESTED:
+      next_state: REFACTOR_CLAIMED
+      allowed_roles: [IMPLEMENTATION]
+      lock_effect:
+        transfer: implementation_lock
+        to_role: REFACTOR
+        ttl_seconds: 7200   # 2 hours
+
+    TASK_LOCK_EXPIRED:
+      next_state: EXPIRED
+      allowed_roles: [system]
+      lock_effect:
+        release: implementation_lock
+
+    TASK_REJECTED:
+      # Review agent pushes back to implementation
+      next_state: IN_PROGRESS
+      allowed_roles: [REVIEW]
+      lock_effect:
+        release: review_lock
+        restore: implementation_lock
+        ttl_seconds: 21600
+
+  REFACTOR_CLAIMED:
+    TASK_HEARTBEAT:
+      next_state: REFACTOR_CLAIMED
+      allowed_roles: [REFACTOR]
+      lock_effect:
+        extend: implementation_lock
+        by_seconds: 7200
+
+    TASK_REFACTOR_COMPLETE:
+      next_state: REVIEW_LOCKED
+      allowed_roles: [REFACTOR]
+      lock_effect:
+        transfer: implementation_lock
+        to_role: REVIEW
+        acquire: review_lock
+        review_ttl_seconds: 3600
+
+    TASK_LOCK_EXPIRED:
+      next_state: EXPIRED
+      allowed_roles: [system]
+      lock_effect:
+        release: implementation_lock
+
+  REVIEW_LOCKED:
+    TASK_HEARTBEAT:
+      next_state: REVIEW_LOCKED
+      allowed_roles: [REVIEW]
+      lock_effect:
+        extend: review_lock
+        by_seconds: 3600
+
+    TASK_APPROVED:
+      next_state: APPROVED
+      allowed_roles: [REVIEW]
+      lock_effect:
+        # review_lock held until ARCHITECT merges
+        keep: review_lock
+
+    TASK_REJECTED:
+      next_state: IN_PROGRESS
+      allowed_roles: [REVIEW]
+      lock_effect:
+        release: review_lock
+        restore: implementation_lock
+        ttl_seconds: 21600
+
+    TASK_LOCK_EXPIRED:
+      # Review timed out — implementation agent reclaims
+      next_state: IN_PROGRESS
+      allowed_roles: [system]
+      lock_effect:
+        release: review_lock
+        restore: implementation_lock
+        ttl_seconds: 21600
+
+  APPROVED:
+    TASK_MERGED:
+      next_state: MERGED
+      allowed_roles: [ARCHITECT]
+      lock_effect:
+        release:
+          - review_lock
+          - implementation_lock
+
+    TASK_ARCHITECT_OVERRIDE:
+      # Architect can unblock any approved task
+      next_state: IN_PROGRESS
+      allowed_roles: [ARCHITECT]
+      lock_effect:
+        release: review_lock
+        restore: implementation_lock
+        ttl_seconds: 21600
+      requires_documentation: true
+
+# ---------------------------------------------------------------------------
+# LOCK ATOMICITY RULES
+# ---------------------------------------------------------------------------
+# These rules are enforced by the projection builder, not by CI scripts.
+# CI scripts MUST NOT re-implement these checks.
+
+lock_atomicity:
+  implementation_lock:
+    can_release:
+      - REVIEW       # via TASK_REVIEW_REQUESTED or TASK_REJECTED
+      - ARCHITECT    # via TASK_ARCHITECT_OVERRIDE only
+      - system       # via TASK_LOCK_EXPIRED only
+    cannot_release:
+      - IMPLEMENTATION  # agents cannot release their own lock directly
+      - REFACTOR
+
+  review_lock:
+    can_release:
+      - ARCHITECT    # via TASK_MERGED
+      - REVIEW       # via TASK_REJECTED or TASK_LOCK_EXPIRED (system)
+      - system       # via TASK_LOCK_EXPIRED only
+    cannot_release:
+      - IMPLEMENTATION
+      - REFACTOR
+
+# ---------------------------------------------------------------------------
+# DETERMINISM RULES
+# ---------------------------------------------------------------------------
+# The transition engine is a pure function.
+# No IO, no time calls, no randomness.
+# Time is INJECTED via the event timestamp — never read from the system clock.
+
+determinism:
+  clock: injected        # time comes from event.timestamp, never from system
+  ordering: deterministic  # events replayed in append order always yield same state
+  side_effects: none     # transitions may not write, emit, or call external systems

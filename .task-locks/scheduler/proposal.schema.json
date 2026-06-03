@@ -1,0 +1,150 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://nova25/task-locks/scheduler/proposal.schema.json",
+  "$comment": "schema_version=1.0.0 | Added 2026-06-03 | Integrity Bridge Layer. Defines the proposal document an agent submits to integrity-bridge.mjs before calling lease-manager.mjs acquire.",
+  "title": "NOVA 2.5 Scheduler Proposal",
+  "description": "A scheduling proposal submitted by an agent to the integrity-bridge for validation. The agent derives this from queue.json after reading the scheduler output. The bridge validates that the world state has not changed since the scheduler ran, then issues a bridge_token authorizing the subsequent lease acquisition.",
+
+  "definitions": {
+
+    "proposal": {
+      "type": "object",
+      "description": "Input to integrity-bridge.mjs validate command. Produced by the agent from the queue entry it intends to act on.",
+      "required": ["task_id", "agent_id", "role", "scheduler_sequence", "world_snapshot_hash"],
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "pattern": "^TASK-[0-9]{4,}(-[a-z])?$",
+          "description": "The task the agent intends to acquire."
+        },
+        "agent_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The agent requesting the lease. Must be registered (ACTIVE) in agents/registry.json."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["IMPLEMENTATION", "REFACTOR", "REVIEW", "ARCHITECT"],
+          "description": "The role the agent intends to fill. Must match the needed_role for this task's current state per scheduler_policy.json."
+        },
+        "scheduler_sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "scheduler_sequence from the queue.json the agent read. Used to detect stale proposals from an older scheduler run."
+        },
+        "world_snapshot_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "world_snapshot.world_snapshot_hash from the queue.json the agent read. The integrity-bridge recomputes this hash from the current file state and rejects the proposal if it differs — ensuring the world has not changed since the scheduler ran."
+        }
+      }
+    },
+
+    "check_result": {
+      "type": "object",
+      "required": ["ok"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": {
+          "type": ["boolean", "null"],
+          "description": "true=passed, false=failed, null=not applicable (check was skipped)."
+        },
+        "reason": {
+          "type": ["string", "null"],
+          "description": "Human-readable explanation."
+        },
+        "detail": {
+          "type": ["object", "null"],
+          "description": "Additional structured detail, check-specific."
+        }
+      }
+    },
+
+    "bridge_response": {
+      "type": "object",
+      "description": "Output of integrity-bridge.mjs validate. Contains the validation result, per-check details, and (if valid) a bridge_token authorizing the lease acquisition.",
+      "required": ["valid", "evaluated_at", "proposal", "checks"],
+      "additionalProperties": false,
+      "properties": {
+        "valid": {
+          "type": "boolean",
+          "description": "True only when ALL checks pass. The agent MUST NOT call lease-manager.mjs acquire if valid=false."
+        },
+        "reason": {
+          "type": ["string", "null"],
+          "description": "First failed check reason, for quick error display. Null when valid=true."
+        },
+        "bridge_token": {
+          "type": ["string", "null"],
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256(task_id:agent_id:role:world_snapshot_hash:evaluated_at). Present only when valid=true. Pass to lease-manager.mjs acquire via --bridge-token. Expires at expires_at."
+        },
+        "expires_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "When the bridge_token expires. Null when valid=false. Lease acquisition MUST complete before this timestamp."
+        },
+        "evaluated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the bridge evaluation was performed. Wall-clock timestamp (informational only — never used in deterministic scheduling logic)."
+        },
+        "proposal": {
+          "$ref": "#/definitions/proposal",
+          "description": "Echo of the submitted proposal, for traceability."
+        },
+        "checks": {
+          "$ref": "#/definitions/check_set",
+          "description": "Per-check results. All checks run regardless of earlier failures."
+        }
+      }
+    },
+
+    "check_set": {
+      "type": "object",
+      "description": "The six validation checks performed by integrity-bridge.mjs, in evaluation order.",
+      "required": [
+        "world_snapshot_match",
+        "scheduler_sequence_match",
+        "task_schedulable",
+        "agent_active",
+        "slot_available",
+        "review_gate"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "world_snapshot_match": {
+          "$ref": "#/definitions/check_result",
+          "description": "B1: recomputed world_snapshot_hash == proposal.world_snapshot_hash. Fails if any input file changed since the scheduler ran."
+        },
+        "scheduler_sequence_match": {
+          "$ref": "#/definitions/check_result",
+          "description": "B2: proposal.scheduler_sequence == scheduler_report.scheduler_sequence. Fails if the scheduler has re-run since the queue was read."
+        },
+        "task_schedulable": {
+          "$ref": "#/definitions/check_result",
+          "description": "B3: task is still in a schedulable state (TODO or REVIEW_LOCKED) in registry.json."
+        },
+        "agent_active": {
+          "$ref": "#/definitions/check_result",
+          "description": "B4: agent is ACTIVE in agents/registry.json. Fails if the agent was suspended or deregistered."
+        },
+        "slot_available": {
+          "$ref": "#/definitions/check_result",
+          "description": "B5: no ACTIVE lease exists in agents/leases.json for (task_id, role_category). Fails if another agent already acquired the slot."
+        },
+        "review_gate": {
+          "$ref": "#/definitions/check_result",
+          "description": "B6: only evaluated for REVIEW/ARCHITECT roles. review_legal=true per task_runtime_state.schema.json. null (N/A) for IMPLEMENTATION/REFACTOR."
+        }
+      }
+    }
+
+  },
+
+  "oneOf": [
+    { "$ref": "#/definitions/proposal" },
+    { "$ref": "#/definitions/bridge_response" }
+  ]
+}

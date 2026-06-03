@@ -1,0 +1,16 @@
+{
+  "status": "verified",
+  "generated_at": "2026-06-03T12:02:24.618Z",
+  "chain_valid": true,
+  "genesis_hash_valid": true,
+  "snapshot_valid": true,
+  "registry_valid": true,
+  "event_count": 3,
+  "snapshot_index": 1,
+  "head_hash": "c548b6c5097f8c61dab9970f87f2d8ec641eca54590dd88b76617a2f496d3e3d",
+  "axiom_events": 0,
+  "deterministic_events": 0,
+  "axiom_density": 0,
+  "violations": [],
+  "reason": null
+}

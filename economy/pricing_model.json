@@ -1,0 +1,17 @@
+{
+  "$comment": "Pricing model configuration. Controls how bid pressure translates to market_pressure_multiplier.",
+  "schema_version": "1.0.0",
+
+  "base_capacity": 3,
+
+  "market_pressure_formula": "1.0 + (active_bid_count / base_capacity)",
+
+  "multiplier_floor": 1.0,
+  "multiplier_ceil":  4.0,
+
+  "bid_ttl_seconds": 3600,
+
+  "price_discovery_threshold": 2,
+
+  "note": "execution_cost in scheduler = base_cost × market_pressure_multiplier(task_id). More bids → higher effective cost → task ranks lower → other tasks surface first."
+}

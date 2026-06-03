@@ -1,0 +1,30 @@
+{
+  "$comment": "Simulation scenario definitions. Each scenario defines a set of simulated agents and events for stress-testing scheduling and lease race conditions.",
+  "schema_version": "1.0.0",
+
+  "scenarios": [
+    {
+      "id":          "basic_lease_race",
+      "description": "Two agents attempt to acquire the same task simultaneously. Verifies FCFS + WRITE.lock atomicity.",
+      "agents":      ["sim-agent-alpha", "sim-agent-beta"],
+      "target_task": "TASK-0001",
+      "role":        "IMPLEMENTATION",
+      "expect":      "exactly_one_lease_acquired"
+    },
+    {
+      "id":          "bridge_token_replay",
+      "description": "One agent uses the same bridge_token twice. Verifies single-use nonce enforcement.",
+      "agents":      ["sim-agent-alpha"],
+      "target_task": "TASK-0002",
+      "role":        "IMPLEMENTATION",
+      "expect":      "second_acquire_rejected_ERR_NONCE_CONSUMED"
+    },
+    {
+      "id":          "stale_world_snapshot",
+      "description": "Agent proposes based on a queue that is one event behind HEAD. Verifies B1 bridge check.",
+      "agents":      ["sim-agent-alpha"],
+      "inject_event": true,
+      "expect":      "bridge_rejects_ERR_WORLD_SNAPSHOT_MISMATCH"
+    }
+  ]
+}

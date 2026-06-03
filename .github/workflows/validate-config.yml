@@ -1,0 +1,709 @@
+name: Validate Config & Event System
+
+# Validates the integrity of the event-sourced workflow kernel files.
+#
+# WHAT THIS VALIDATES:
+#   - .task-locks/transitions.yaml  — structure, engine_version, required sections
+#   - .task-locks/event.schema.json — valid JSON Schema
+#   - .task-locks/registry.schema.json — valid JSON Schema
+#   - .task-locks/genesis.json - bootstrap task manifest, engine_version match
+#   - .task-locks/registry.json - valid against registry.schema.json, engine_version match
+#   - docs/ROADMAP.md - generated view matches registry.json
+#   - TASK_EVENTS.jsonl — no index gaps, engine_version match, schema-valid events
+#   - .github/workflows/*.yml — actionlint + yamllint
+#
+# WHAT THIS NO LONGER VALIDATES:
+#   - TASK_LOCKS.md  (Markdown is now read-only documentation, not source of truth)
+#
+# This workflow is the first line of defence against config drift.
+# It runs on any change to workflow files, .task-locks/ files, or TASK_EVENTS.jsonl.
+
+on:
+  push:
+    paths:
+      - '.github/workflows/**'
+      - '.github/*.md'
+      - '.task-locks/**'
+      - 'TASK_EVENTS.jsonl'
+      - 'docs/ROADMAP.md'
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.github/*.md'
+      - '.task-locks/**'
+      - 'TASK_EVENTS.jsonl'
+      - 'docs/ROADMAP.md'
+
+permissions:
+  contents: read
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # JOB 1: Validate GitHub Actions workflow files
+  # ---------------------------------------------------------------------------
+  validate-workflows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install actionlint
+        run: |
+          curl -sL https://github.com/rhysd/actionlint/releases/download/v1.7.1/actionlint_linux_amd64 \
+            -o /usr/local/bin/actionlint
+          chmod +x /usr/local/bin/actionlint
+
+      - name: Validate workflow YAML with actionlint
+        run: |
+          actionlint .github/workflows/*.yml
+          echo "✓ All workflows pass actionlint."
+
+      - name: Validate YAML syntax with yamllint
+        run: |
+          pip install yamllint --quiet
+          yamllint -d "{rules: {line-length: {max: 200}, indentation: {spaces: 2}}}" \
+            .github/workflows/*.yml
+          echo "✓ All workflow YAML is syntactically valid."
+
+  # ---------------------------------------------------------------------------
+  # JOB 2: Validate transitions.yaml (the state machine — single source of truth)
+  # ---------------------------------------------------------------------------
+  validate-transitions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install js-yaml
+        run: npm install js-yaml --prefix /tmp/nova-validate
+
+      - name: Validate transitions.yaml structure
+        run: |
+          node - <<'SCRIPT'
+          const fs   = require('fs');
+          const yaml = require('/tmp/nova-validate/node_modules/js-yaml');
+
+          let transitions;
+          try {
+            transitions = yaml.load(fs.readFileSync('.task-locks/transitions.yaml', 'utf8'));
+          } catch (e) {
+            console.error(`❌ Failed to parse transitions.yaml: ${e.message}`);
+            process.exit(1);
+          }
+
+          const errors = [];
+
+          // Required top-level fields.
+          for (const field of ['engine_version', 'spec_version', 'terminal_states',
+                               'transitions', 'lock_atomicity', 'determinism',
+                               'fork_suffix_alphabet', 'fork_nesting_max']) {
+            if (transitions[field] === undefined) {
+              errors.push(`Missing required field: '${field}'`);
+            }
+          }
+
+          // engine_version must be a positive integer.
+          if (typeof transitions.engine_version !== 'number' || transitions.engine_version < 1) {
+            errors.push(`engine_version must be a positive integer, got: ${transitions.engine_version}`);
+          }
+
+          // terminal_states must be an array.
+          if (!Array.isArray(transitions.terminal_states)) {
+            errors.push(`terminal_states must be an array`);
+          }
+
+          // transitions must be an object with at least one state.
+          if (!transitions.transitions || typeof transitions.transitions !== 'object') {
+            errors.push(`transitions must be an object`);
+          } else {
+            // Each state must have at least one event → next_state mapping.
+            for (const [state, events] of Object.entries(transitions.transitions)) {
+              if (!events || typeof events !== 'object') {
+                errors.push(`State '${state}': must be an object of event → transition`);
+                continue;
+              }
+              for (const [event, t] of Object.entries(events)) {
+                if (!t.next_state) {
+                  errors.push(`State '${state}' event '${event}': missing 'next_state'`);
+                }
+                if (!Array.isArray(t.allowed_roles) || t.allowed_roles.length === 0) {
+                  errors.push(`State '${state}' event '${event}': missing or empty 'allowed_roles'`);
+                }
+              }
+            }
+          }
+
+          // Terminal states must not have outgoing transitions.
+          for (const terminal of (transitions.terminal_states || [])) {
+            if (transitions.transitions && transitions.transitions[terminal]) {
+              errors.push(
+                `Terminal state '${terminal}' must not have outgoing transitions. ` +
+                `Remove it from transitions or from terminal_states.`
+              );
+            }
+          }
+
+          // fork_nesting_max must be 1 (canonical fork rule).
+          if (transitions.fork_nesting_max !== 1) {
+            errors.push(
+              `fork_nesting_max must be 1 (canonical fork depth). Got: ${transitions.fork_nesting_max}`
+            );
+          }
+
+          if (errors.length > 0) {
+            console.error(`❌ transitions.yaml has ${errors.length} error(s):`);
+            for (const e of errors) console.error(`  - ${e}`);
+            process.exit(1);
+          }
+
+          console.log(
+            `✓ transitions.yaml valid: engine_version=${transitions.engine_version}, ` +
+            `${Object.keys(transitions.transitions).length} states defined.`
+          );
+          SCRIPT
+
+  # ---------------------------------------------------------------------------
+  # JOB 3: Validate JSON schema files (event.schema.json, registry.schema.json)
+  # ---------------------------------------------------------------------------
+  validate-schemas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ajv
+        run: npm install ajv ajv-formats --prefix /tmp/nova-validate
+
+      - name: Validate event.schema.json is a valid JSON Schema
+        run: |
+          node - <<'SCRIPT'
+          const fs  = require('fs');
+          const Ajv = require('/tmp/nova-validate/node_modules/ajv');
+          const addFormats = require('/tmp/nova-validate/node_modules/ajv-formats');
+
+          const ajv = new Ajv({ strict: false });
+          addFormats(ajv);
+
+          let schema;
+          try {
+            schema = JSON.parse(fs.readFileSync('.task-locks/event.schema.json', 'utf8'));
+          } catch (e) {
+            console.error(`❌ Failed to parse event.schema.json: ${e.message}`);
+            process.exit(1);
+          }
+
+          try {
+            ajv.compile(schema);
+            console.log('✓ event.schema.json is a valid JSON Schema.');
+          } catch (e) {
+            console.error(`❌ event.schema.json is not a valid JSON Schema: ${e.message}`);
+            process.exit(1);
+          }
+          SCRIPT
+
+      - name: Validate registry.schema.json is a valid JSON Schema
+        run: |
+          node - <<'SCRIPT'
+          const fs  = require('fs');
+          const Ajv = require('/tmp/nova-validate/node_modules/ajv');
+          const addFormats = require('/tmp/nova-validate/node_modules/ajv-formats');
+
+          const ajv = new Ajv({ strict: false });
+          addFormats(ajv);
+
+          let schema;
+          try {
+            schema = JSON.parse(fs.readFileSync('.task-locks/registry.schema.json', 'utf8'));
+          } catch (e) {
+            console.error(`❌ Failed to parse registry.schema.json: ${e.message}`);
+            process.exit(1);
+          }
+
+          try {
+            ajv.compile(schema);
+            console.log('✓ registry.schema.json is a valid JSON Schema.');
+          } catch (e) {
+            console.error(`❌ registry.schema.json is not a valid JSON Schema: ${e.message}`);
+            process.exit(1);
+          }
+          SCRIPT
+
+  # ---------------------------------------------------------------------------
+  # JOB 4: Validate registry.json against schema + engine_version consistency
+  # ---------------------------------------------------------------------------
+  validate-registry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ajv + js-yaml
+        run: npm install ajv ajv-formats js-yaml --prefix /tmp/nova-validate
+
+      - name: Validate registry.json
+        run: |
+          node - <<'SCRIPT'
+          const fs   = require('fs');
+          const yaml = require('/tmp/nova-validate/node_modules/js-yaml');
+          const Ajv  = require('/tmp/nova-validate/node_modules/ajv');
+          const addFormats = require('/tmp/nova-validate/node_modules/ajv-formats');
+
+          const transitions = yaml.load(fs.readFileSync('.task-locks/transitions.yaml', 'utf8'));
+          const schema   = JSON.parse(fs.readFileSync('.task-locks/registry.schema.json', 'utf8'));
+          const genesis  = JSON.parse(fs.readFileSync('.task-locks/genesis.json', 'utf8'));
+          const registry = JSON.parse(fs.readFileSync('.task-locks/registry.json', 'utf8'));
+
+          const errors = [];
+
+          // engine_version must match transitions.yaml.
+          if (registry.engine_version !== transitions.engine_version) {
+            errors.push(
+              `engine_version mismatch: registry.json has ${registry.engine_version}, ` +
+              `transitions.yaml has ${transitions.engine_version}. ` +
+              `Run projection-builder to rebuild registry.json.`
+            );
+          }
+
+          if (genesis.engine_version !== transitions.engine_version) {
+            errors.push(
+              `engine_version mismatch: genesis.json has ${genesis.engine_version}, ` +
+              `transitions.yaml has ${transitions.engine_version}.`
+            );
+          }
+
+          const genesisTasks = genesis.tasks || [];
+          const duplicateGenesisTasks = genesisTasks.filter((taskId, index) =>
+            genesisTasks.indexOf(taskId) !== index
+          );
+          if (duplicateGenesisTasks.length > 0) {
+            errors.push(`genesis.json contains duplicate task IDs: ${[...new Set(duplicateGenesisTasks)].join(', ')}`);
+          }
+          for (const taskId of genesisTasks) {
+            if (!/^TASK-\d{4,}$/.test(taskId)) {
+              errors.push(`genesis.json contains invalid task ID: ${taskId}`);
+            }
+          }
+
+          // Genesis invariant: when only ENGINE_INITIALIZED exists, registry.json
+          // contains the complete bootstrap task set. Markdown is not an input.
+          const eventLines = fs.readFileSync('TASK_EVENTS.jsonl', 'utf8')
+            .trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+          if (eventLines.length === 1 && eventLines[0].event_type === 'ENGINE_INITIALIZED') {
+            const expectedGenesisTasks = [...genesisTasks].sort();
+            const actualIds = (registry.tasks || []).map(task => task.task_id).sort();
+            if (JSON.stringify(actualIds) !== JSON.stringify(expectedGenesisTasks)) {
+              errors.push(
+                `ENGINE_INITIALIZED registry must contain exactly the genesis task set ` +
+                `from .task-locks/genesis.json. Found: ${actualIds.join(', ')}`
+              );
+            }
+
+            for (const task of (registry.tasks || [])) {
+              if (
+                task.status !== 'TODO' ||
+                task.implementation_lock !== null ||
+                task.review_lock !== null ||
+                task.last_event_index !== 0
+              ) {
+                errors.push(
+                  `Genesis task ${task.task_id}: expected TODO, null locks, last_event_index=0.`
+                );
+              }
+            }
+          }
+
+          // Validate against schema.
+          const ajv = new Ajv({ strict: false, allErrors: true });
+          addFormats(ajv);
+          const validate = ajv.compile(schema);
+          if (!validate(registry)) {
+            for (const err of validate.errors) {
+              errors.push(`Schema: ${err.instancePath || '(root)'}: ${err.message}`);
+            }
+          }
+
+          // All task statuses must be valid states in transitions.yaml.
+          const validStates = new Set([
+            ...Object.keys(transitions.transitions),
+            ...transitions.terminal_states
+          ]);
+          for (const task of (registry.tasks || [])) {
+            if (!validStates.has(task.status)) {
+              errors.push(
+                `Task ${task.task_id}: unknown status '${task.status}'. ` +
+                `Valid states: ${[...validStates].join(', ')}`
+              );
+            }
+          }
+
+          if (errors.length > 0) {
+            console.error(`❌ registry.json has ${errors.length} error(s):`);
+            for (const e of errors) console.error(`  - ${e}`);
+            process.exit(1);
+          }
+
+          console.log(
+            `✓ registry.json valid: ${registry.tasks.length} tasks, ` +
+            `engine_version=${registry.engine_version}, ` +
+            `event_count=${registry.event_count}`
+          );
+          SCRIPT
+
+  # ---------------------------------------------------------------------------
+  # JOB 5: Validate ROADMAP.md projection matches registry.json
+  # ---------------------------------------------------------------------------
+  validate-roadmap-projection:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify ROADMAP.md is a registry projection
+        run: node .task-locks/roadmap-projection.mjs verify
+  # ---------------------------------------------------------------------------
+  # JOB 6: Validate TASK_EVENTS.jsonl - index continuity, engine_version, schema, hash chain
+  # ---------------------------------------------------------------------------
+  validate-event-log:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install js-yaml + ajv
+        run: npm install js-yaml ajv ajv-formats --prefix /tmp/nova-validate
+
+      - name: Validate TASK_EVENTS.jsonl
+        run: |
+          node - <<'SCRIPT'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const yaml = require('/tmp/nova-validate/node_modules/js-yaml');
+          const Ajv = require('/tmp/nova-validate/node_modules/ajv');
+          const addFormats = require('/tmp/nova-validate/node_modules/ajv-formats');
+
+          function canonical(value) {
+            if (value === null || typeof value !== 'object') return JSON.stringify(value);
+            if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
+            return '{' + Object.keys(value).sort().map(k => JSON.stringify(k) + ':' + canonical(value[k])).join(',') + '}';
+          }
+
+          function sha256(text) {
+            return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+          }
+
+          function eventHashInput(event) {
+            const withoutHashFields = { ...event };
+            delete withoutHashFields.event_hash;
+            delete withoutHashFields.prev_event_hash;
+            return canonical(withoutHashFields) + event.prev_event_hash;
+          }
+
+          const transitions = yaml.load(fs.readFileSync('.task-locks/transitions.yaml', 'utf8'));
+          const ENGINE_VER = transitions.engine_version;
+          const eventSchema = JSON.parse(fs.readFileSync('.task-locks/event.schema.json', 'utf8'));
+
+          const raw = fs.readFileSync('TASK_EVENTS.jsonl', 'utf8').trim();
+          if (!raw) {
+            console.error('TASK_EVENTS.jsonl is empty. Must contain ENGINE_INITIALIZED at index 0.');
+            process.exit(1);
+          }
+
+          const lines = raw.split('\n');
+          const ajv = new Ajv({ allErrors: true, strict: false });
+          addFormats(ajv);
+          const validate = ajv.compile(eventSchema);
+          const parsed = [];
+          let errors = 0;
+
+          for (let i = 0; i < lines.length; i++) {
+            let ev;
+            try {
+              ev = JSON.parse(lines[i]);
+              parsed.push(ev);
+            } catch (e) {
+              console.error(`Line ${i + 1}: JSON parse error: ${e.message}`);
+              errors++;
+              continue;
+            }
+
+            if (ev.event_index !== i) {
+              console.error(`REORDERED_LOG Line ${i + 1}: event_index gap; expected ${i}, got ${ev.event_index}`);
+              errors++;
+            }
+
+            if (ev.engine_version !== ENGINE_VER) {
+              console.error(`Line ${i + 1}: engine_version mismatch; event has ${ev.engine_version}, transitions.yaml has ${ENGINE_VER}`);
+              errors++;
+            }
+
+            if (!validate(ev)) {
+              console.error(`Line ${i + 1} (event_index=${ev.event_index}): schema errors:`);
+              for (const err of validate.errors) console.error(`  ${err.instancePath || '(root)'}: ${err.message}`);
+              errors++;
+            }
+
+            const expectedPrev = i === 0 ? 'GENESIS' : parsed[i - 1]?.event_hash;
+            if (ev.prev_event_hash !== expectedPrev) {
+              console.error(`ORPHAN_EVENT Event ${i}: prev_event_hash mismatch; expected ${expectedPrev}, got ${ev.prev_event_hash}`);
+              errors++;
+            }
+
+            const expectedHash = sha256(eventHashInput(ev));
+            if (ev.event_hash !== expectedHash) {
+              console.error(`TAMPERED_EVENT Event ${i}: event_hash mismatch; expected ${expectedHash}, got ${ev.event_hash}`);
+              errors++;
+            }
+
+            if (i > 0 && ev.prev_event_hash !== parsed[i - 1]?.event_hash) {
+              console.error(`HASH_BREAK Event ${i}: chain link does not match previous event_hash`);
+              errors++;
+            }
+          }
+
+          const first = parsed[0];
+          if (!first || first.event_type !== 'ENGINE_INITIALIZED') {
+            console.error(`First event must be ENGINE_INITIALIZED, got: ${first?.event_type}`);
+            errors++;
+          }
+
+          if (errors > 0) {
+            console.error(`\nTASK_EVENTS.jsonl has ${errors} error(s) across ${lines.length} events.`);
+            process.exit(1);
+          }
+
+          console.log(`OK TASK_EVENTS.jsonl valid: ${lines.length} events, hash chain intact.`);
+          SCRIPT
+  # ---------------------------------------------------------------------------
+  # JOB 7: Validate snapshots are reproducible checkpoints, not truth sources
+  # ---------------------------------------------------------------------------
+  validate-snapshots:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install js-yaml
+        run: npm install js-yaml --prefix /tmp/nova-validate
+
+      - name: Validate snapshot reproducibility
+        run: |
+          node - <<'SCRIPT'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const yaml = require('/tmp/nova-validate/node_modules/js-yaml');
+
+          function canonical(value) {
+            if (value === null || typeof value !== 'object') return JSON.stringify(value);
+            if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
+            return '{' + Object.keys(value).sort().map(k => JSON.stringify(k) + ':' + canonical(value[k])).join(',') + '}';
+          }
+
+          function sha256(text) {
+            return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+          }
+
+          function addSeconds(isoTimestamp, seconds) {
+            return new Date(new Date(isoTimestamp).getTime() + seconds * 1000).toISOString();
+          }
+
+          function verifyHashChain(events) {
+            for (let i = 0; i < events.length; i++) {
+              const ev = events[i];
+              const expectedPrev = i === 0 ? 'GENESIS' : events[i - 1].event_hash;
+              if (ev.prev_event_hash !== expectedPrev) throw new Error(`snapshot built from invalid chain: event ${i} prev_event_hash mismatch`);
+              const withoutHashFields = { ...ev };
+              delete withoutHashFields.event_hash;
+              delete withoutHashFields.prev_event_hash;
+              const expectedHash = sha256(canonical(withoutHashFields) + ev.prev_event_hash);
+              if (ev.event_hash !== expectedHash) throw new Error(`snapshot built from invalid chain: event ${i} event_hash mismatch`);
+            }
+          }
+
+          function project(events, genesis, transitions) {
+            const terminalStates = new Set(transitions.terminal_states);
+            const state = {};
+            for (const tid of genesis.tasks || []) {
+              state[tid] = {
+                task_id: tid,
+                status: 'TODO',
+                implementation_lock: null,
+                review_lock: null,
+                forked_from: null,
+                fork_suffix: null,
+                pr_number: null,
+                last_event_index: 0
+              };
+            }
+
+            function buildLock(event, ttlSeconds) {
+              return {
+                agent: event.agent,
+                model: event.model,
+                role: event.role,
+                branch: event.branch || null,
+                claimed_at: event.timestamp,
+                expires_at: addSeconds(event.timestamp, ttlSeconds),
+                last_heartbeat: event.timestamp
+              };
+            }
+
+            for (const ev of events) {
+              const { event_type, task_id, timestamp } = ev;
+              if (event_type === 'ENGINE_INITIALIZED' || event_type === 'PROJECTION_REBUILT') continue;
+              if (event_type === 'TASK_FORKED') {
+                state[ev.task_id] = {
+                  task_id: ev.task_id,
+                  status: 'TODO',
+                  implementation_lock: null,
+                  review_lock: null,
+                  forked_from: ev.forked_from,
+                  fork_suffix: ev.fork_suffix,
+                  pr_number: null,
+                  last_event_index: ev.event_index
+                };
+                continue;
+              }
+              const task = state[task_id];
+              if (!task) throw new Error(`snapshot replay references unknown task ${task_id}`);
+              if (terminalStates.has(task.status)) throw new Error(`snapshot replay targets terminal task ${task_id}`);
+              const t = transitions.transitions[task.status]?.[event_type];
+              if (!t) throw new Error(`snapshot replay forbidden transition ${task.status} + ${event_type}`);
+              task.status = t.next_state;
+              task.last_event_index = ev.event_index;
+              if (ev.pr_number != null) task.pr_number = ev.pr_number;
+              if (!t.lock_effect) continue;
+              const le = t.lock_effect;
+              if (le.acquire === 'implementation_lock') task.implementation_lock = buildLock(ev, le.ttl_seconds || 21600);
+              if (le.acquire === 'review_lock') task.review_lock = buildLock(ev, le.review_ttl_seconds || 3600);
+              if (le.transfer === 'implementation_lock') {
+                if (task.implementation_lock) {
+                  task.implementation_lock.role = le.to_role;
+                  task.implementation_lock.last_heartbeat = timestamp;
+                }
+                if (le.acquire === 'review_lock') task.review_lock = buildLock(ev, le.review_ttl_seconds || 3600);
+              }
+              if (le.extend) {
+                const lockField = `${le.extend}`;
+                if (task[lockField]) {
+                  task[lockField].last_heartbeat = timestamp;
+                  task[lockField].expires_at = addSeconds(timestamp, le.by_seconds || 21600);
+                }
+              }
+              if (le.release) {
+                const fields = Array.isArray(le.release) ? le.release : [le.release];
+                for (const f of fields) task[f] = null;
+              }
+              if (le.restore) {
+                const lockField = `${le.restore}`;
+                if (task[lockField]) {
+                  task[lockField].last_heartbeat = timestamp;
+                  task[lockField].expires_at = addSeconds(timestamp, le.ttl_seconds || 21600);
+                }
+              }
+              if (le.keep) {
+                const lockField = `${le.keep}`;
+                if (task[lockField]) task[lockField].last_heartbeat = timestamp;
+              }
+            }
+
+            return {
+              schema_version: 1,
+              engine_version: transitions.engine_version,
+              generated_at: events[events.length - 1].timestamp,
+              event_count: events.length,
+              tasks: Object.values(state).sort((a, b) => a.task_id.localeCompare(b.task_id))
+            };
+          }
+
+          const transitions = yaml.load(fs.readFileSync('.task-locks/transitions.yaml', 'utf8'));
+          const genesis = JSON.parse(fs.readFileSync('.task-locks/genesis.json', 'utf8'));
+          const events = fs.readFileSync('TASK_EVENTS.jsonl', 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+          verifyHashChain(events);
+
+          const snapshotDir = '.task-locks/snapshots';
+          if (!fs.existsSync(snapshotDir)) {
+            console.error('No .task-locks/snapshots directory found. Snapshot foundation requires at least snapshot_0.json.');
+            process.exit(1);
+          }
+
+          const files = fs.readdirSync(snapshotDir).filter(name => /^snapshot_\d+\.json$/.test(name)).sort();
+          if (files.length === 0) {
+            console.error('No snapshot_*.json files found. Snapshot foundation requires at least snapshot_0.json.');
+            process.exit(1);
+          }
+
+          const genesisHash = sha256(canonical(genesis));
+          const errors = [];
+          for (const file of files) {
+            const snapshot = JSON.parse(fs.readFileSync(`${snapshotDir}/${file}`, 'utf8'));
+            const fileIndex = Number(file.match(/^snapshot_(\d+)\.json$/)[1]);
+            if (snapshot.event_index !== fileIndex) errors.push(`${file}: event_index does not match filename`);
+            const event = events[snapshot.event_index];
+            if (!event) {
+              errors.push(`${file}: event_index ${snapshot.event_index} does not exist in TASK_EVENTS.jsonl`);
+              continue;
+            }
+            if (snapshot.event_hash !== event.event_hash) errors.push(`${file}: event_hash does not match TASK_EVENTS.jsonl`);
+            if (snapshot.genesis_hash !== genesisHash) errors.push(`${file}: genesis_hash mismatch`);
+            if (snapshot.projection_version !== 1) errors.push(`${file}: unsupported projection_version ${snapshot.projection_version}`);
+            const expectedRegistry = project(events.slice(0, snapshot.event_index + 1), genesis, transitions);
+            if (canonical(snapshot.registry) !== canonical(expectedRegistry)) {
+              errors.push(`${file}: snapshot registry is not reproducible from genesis + events`);
+            }
+          }
+
+          if (errors.length > 0) {
+            console.error('Snapshot validation failed:');
+            for (const e of errors) console.error(`  - ${e}`);
+            process.exit(1);
+          }
+
+          console.log(`OK snapshots valid: ${files.length} reproducible checkpoint(s).`);
+          SCRIPT
+  # ---------------------------------------------------------------------------
+  # JOB 8: Engine version consistency check across all kernel files
+  # ---------------------------------------------------------------------------
+  engine-version-consistency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install js-yaml
+        run: npm install js-yaml --prefix /tmp/nova-validate
+
+      - name: Verify all kernel files agree on engine_version
+        run: |
+          node - <<'SCRIPT'
+          const fs   = require('fs');
+          const yaml = require('/tmp/nova-validate/node_modules/js-yaml');
+
+          const transitions   = yaml.load(fs.readFileSync('.task-locks/transitions.yaml', 'utf8'));
+          const genesis       = JSON.parse(fs.readFileSync('.task-locks/genesis.json', 'utf8'));
+          const registry      = JSON.parse(fs.readFileSync('.task-locks/registry.json', 'utf8'));
+          const regSchema     = JSON.parse(fs.readFileSync('.task-locks/registry.schema.json', 'utf8'));
+
+          const transVer  = transitions.engine_version;
+          const genVer    = genesis.engine_version;
+          const regVer    = registry.engine_version;
+          const schemaVer = regSchema.properties?.engine_version?.const;
+
+          const errors = [];
+          if (genVer    !== transVer) errors.push(`genesis.json engine_version=${genVer} != transitions.yaml engine_version=${transVer}`);
+          if (regVer    !== transVer) errors.push(`registry.json engine_version=${regVer} ≠ transitions.yaml engine_version=${transVer}`);
+          if (schemaVer !== transVer) errors.push(`registry.schema.json const=${schemaVer} ≠ transitions.yaml engine_version=${transVer}`);
+
+          // Check first event in TASK_EVENTS.jsonl.
+          const firstLine = fs.readFileSync('TASK_EVENTS.jsonl', 'utf8').trim().split('\n')[0];
+          const firstEv = JSON.parse(firstLine);
+          if (firstEv.engine_version !== transVer) {
+            errors.push(
+              `TASK_EVENTS.jsonl[0] engine_version=${firstEv.engine_version} ≠ transitions.yaml engine_version=${transVer}`
+            );
+          }
+
+          if (errors.length > 0) {
+            console.error('❌ engine_version inconsistency across kernel files:');
+            for (const e of errors) console.error(`  - ${e}`);
+            console.error('');
+            console.error('All kernel files must agree on engine_version.');
+            console.error('If you updated transitions.yaml, run projection-builder to rebuild registry.json');
+            console.error('and update any existing events or create migration events.');
+            process.exit(1);
+          }
+
+          console.log(`✓ engine_version=${transVer} is consistent across all kernel files.`);
+          SCRIPT

@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "system_name": "NOVA 2.5",
+  "execution_model": "event_sourced",
+  "truth_layers": {
+    "event_store": "TASK_EVENTS.jsonl",
+    "genesis_manifest": ".task-locks/genesis.json",
+    "rule_engine": ".task-locks/transitions.yaml",
+    "projection": ".task-locks/registry.json"
+  },
+  "entry_sequence": [
+    "load_constraints",
+    "load_onboarding",
+    "load_genesis",
+    "load_registry",
+    "load_transitions",
+    "resolve_role",
+    "resolve_task",
+    "check_lock",
+    "execute_allowed_action"
+  ],
+  "required_context": {
+    "task_id": true,
+    "role": true,
+    "model": true
+  },
+  "forbidden_actions": [
+    "direct_registry_edit",
+    "direct_event_log_edit",
+    "markdown_state_authority",
+    "local_transition_logic",
+    "local_assignment_system",
+    "local_lock_system",
+    "hidden_state_cache"
+  ],
+  "agent_identity": {
+    "roles": [
+      "IMPLEMENTATION",
+      "REFACTOR",
+      "REVIEW",
+      "ARCHITECT"
+    ]
+  },
+  "failure_policy": {
+    "on_registry_event_mismatch": "hard_fail",
+    "on_transition_mismatch": "hard_fail",
+    "on_lock_conflict": "hard_fail",
+    "on_missing_context": "hard_fail",
+    "on_unverified_state": "stop"
+  }
+}

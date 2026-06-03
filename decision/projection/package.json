@@ -1,0 +1,17 @@
+{
+  "name": "comm-projection-engine",
+  "version": "1.0.0",
+  "description": "COMM Projection Engine — watches inbox/outbox, builds typed projection cache",
+  "type": "module",
+  "main": "engine.js",
+  "scripts": {
+    "start": "node engine.js",
+    "check": "node --check engine.js projector.js watcher.js sse_broker.js schema.js"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

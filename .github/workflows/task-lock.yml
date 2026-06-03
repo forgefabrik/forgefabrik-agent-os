@@ -1,0 +1,559 @@
+name: Task Lock — Event Writer
+
+# ARCHITECTURE CONTRACT:
+#   This workflow is the ONLY writer of TASK_EVENTS.jsonl (apart from the
+#   initial ENGINE_INITIALIZED seed line).
+#
+#   It does NOT build the projection (that is projection-builder.yml).
+#   It does NOT duplicate or re-implement any logic from transitions.yaml.
+#   It does NOT compute event hashes inline — that is .task-locks/event-writer.mjs.
+#
+#   All hash computation (SHA-256 chain, prev_event_hash, event_hash) lives
+#   exclusively in .task-locks/event-writer.mjs.  This workflow calls that
+#   script as a subprocess; it never reimplements the algorithm.
+#
+# Write protocol:
+#   1. Prepare-event step: build payload JSON → /tmp/pending-event.json
+#      (event_index / prev_event_hash / event_hash intentionally absent)
+#   2. Append-and-push step: git pull --rebase, then
+#      `node .task-locks/event-writer.mjs --event /tmp/pending-event.json --no-lock`
+#      (index + hashes computed fresh from current HEAD state after rebase)
+#   3. git add / commit / push with retry-on-conflict (up to 5 attempts).
+#   4. On conflict: restore TASK_EVENTS.jsonl, rebase, retry from step 2.
+#
+# Why --no-lock in CI:
+#   The advisory WRITE.lock is designed for multi-process local use.
+#   In GitHub Actions each runner has its own workspace; concurrent runners
+#   never share a filesystem.  The git push conflict + rebase retry loop IS
+#   the serialisation mechanism in CI — the lock file adds no protection here.
+
+on:
+  pull_request:
+    types: [opened, reopened, closed]
+
+  issue_comment:
+    types: [created]
+
+  schedule:
+    # Every 30 minutes: scan registry for expired locks and write
+    # TASK_LOCK_EXPIRED events for any that have passed their expires_at.
+    - cron: '*/30 * * * *'
+
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # JOB 1: Handle PR open → TASK_CLAIMED event
+  # ---------------------------------------------------------------------------
+  on-pr-opened:
+    if: github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'reopened')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install js-yaml
+        run: npm install js-yaml --prefix /tmp/nova-lock
+
+      - name: Parse PR declaration and write TASK_CLAIMED event
+        uses: actions/github-script@v6
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          script: |
+            const fs   = require('fs');
+            const yaml = require('/tmp/nova-lock/node_modules/js-yaml');
+
+            const pr   = context.payload.pull_request;
+            const body = pr.body || '';
+
+            const roleMatch  = body.match(/\*{0,2}Role:\*{0,2}\s*(IMPLEMENTATION|REFACTOR|REVIEW|ARCHITECT)/i);
+            const taskMatch  = body.match(/\*{0,2}Task\s*ID:\*{0,2}\s*(TASK-\d{4,})/i);
+            const modelMatch = body.match(/\*{0,2}Model:\*{0,2}\s*([^\n\r]+)/i);
+
+            if (!roleMatch || !taskMatch) {
+              core.info('No agent declaration in PR body — skipping TASK_CLAIMED event.');
+              return;
+            }
+
+            const role   = roleMatch[1].toUpperCase();
+            const taskId = taskMatch[1];
+            const model  = modelMatch ? modelMatch[1].trim() : 'unknown';
+            const agent  = pr.user.login;
+
+            const registry = JSON.parse(fs.readFileSync('.task-locks/registry.json', 'utf8'));
+            const task = registry.tasks.find(t => t.task_id === taskId);
+            if (!task) {
+              core.setFailed(`Task ${taskId} not present in registry.json`);
+              return;
+            }
+            if (task.status !== 'TODO') {
+              core.setFailed(
+                `Task ${taskId} is in status '${task.status}' — only TODO tasks can be claimed. ` +
+                (task.status === 'EXPIRED'
+                  ? 'EXPIRED is terminal. Request a TASK_FORKED event from an ARCHITECT.'
+                  : 'Wait for the current lock to expire or be released.')
+              );
+              return;
+            }
+
+            const engineVersion = yaml.load(
+              fs.readFileSync('.task-locks/transitions.yaml', 'utf8')
+            ).engine_version;
+
+            // Payload: event_index / prev_event_hash / event_hash omitted —
+            // computed by event-writer.mjs at append time.
+            const event = {
+              event_type:      'TASK_CLAIMED',
+              engine_version:  engineVersion,
+              timestamp:       new Date().toISOString(),
+              task_id:         taskId,
+              agent,
+              role,
+              model,
+              branch:          pr.head.ref,
+              pr_number:       pr.number,
+              forked_from:     null,
+              fork_suffix:     null,
+              override_reason: null,
+              notes:           null,
+              snapshot_index:  null,
+            };
+
+            fs.writeFileSync('/tmp/pending-event.json', JSON.stringify(event));
+            core.info(`Prepared TASK_CLAIMED for ${taskId} by ${agent} (${role})`);
+
+      - name: Append event and push
+        run: |
+          if [ ! -f /tmp/pending-event.json ]; then
+            echo "No pending event — skipping."
+            exit 0
+          fi
+
+          git config user.name  "task-lock[bot]"
+          git config user.email "task-lock[bot]@users.noreply.github.com"
+
+          EVENT_TYPE=$(node -p "require('/tmp/pending-event.json').event_type")
+          TASK_ID=$(node -p "require('/tmp/pending-event.json').task_id || '(system)'")
+
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main 2>/dev/null || true
+
+            # event-writer.mjs: validate payload, compute index + hash chain, append.
+            # --no-lock: git retry loop is the serialisation mechanism in CI.
+            if ! node .task-locks/event-writer.mjs \
+                  --event /tmp/pending-event.json \
+                  --no-lock; then
+              echo "event-writer.mjs failed — aborting (no retry for validation errors)."
+              exit 1
+            fi
+
+            INDEX=$(node -e "
+              const fs = require('fs');
+              const lines = fs.readFileSync('TASK_EVENTS.jsonl','utf8').trim().split('\n').filter(Boolean);
+              console.log(lines.length - 1);
+            ")
+
+            git add TASK_EVENTS.jsonl
+            git commit -m "[system] event: ${EVENT_TYPE} ${TASK_ID} (index=${INDEX})"
+
+            git push && { echo "Push succeeded on attempt ${attempt}."; break; } || {
+              echo "Push conflict on attempt ${attempt} — rebasing and retrying..."
+              git reset HEAD~1 -- TASK_EVENTS.jsonl
+              git checkout -- TASK_EVENTS.jsonl
+              git reset --soft HEAD~1
+              sleep $((attempt * 2))
+            }
+          done
+
+  # ---------------------------------------------------------------------------
+  # JOB 2: Handle PR merged → TASK_MERGED event
+  # ---------------------------------------------------------------------------
+  on-pr-merged:
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install js-yaml
+        run: npm install js-yaml --prefix /tmp/nova-lock
+
+      - name: Prepare TASK_MERGED event
+        run: |
+          node - <<'SCRIPT'
+          const fs   = require('fs');
+          const yaml = require('/tmp/nova-lock/node_modules/js-yaml');
+
+          const prBody   = process.env.PR_BODY   || '';
+          const prAuthor = process.env.PR_AUTHOR || 'unknown';
+          const prNumber = parseInt(process.env.PR_NUMBER, 10);
+
+          const taskMatch  = prBody.match(/Task\s*ID:\s*(TASK-\d{4,})/i);
+          const modelMatch = prBody.match(/Model:\s*([^\n\r]+)/i);
+
+          if (!taskMatch) {
+            console.log('No task ID in merged PR — skipping TASK_MERGED event.');
+            process.exit(0);
+          }
+
+          const taskId = taskMatch[1];
+          const model  = modelMatch ? modelMatch[1].trim() : 'unknown';
+
+          const registry = JSON.parse(fs.readFileSync('.task-locks/registry.json', 'utf8'));
+          const task = registry.tasks.find(t => t.task_id === taskId);
+          if (!task || task.status !== 'APPROVED') {
+            console.log(`Task ${taskId} is not APPROVED (status=${task ? task.status : 'unknown'}) — skipping.`);
+            process.exit(0);
+          }
+
+          const engineVersion = yaml.load(
+            fs.readFileSync('.task-locks/transitions.yaml', 'utf8')
+          ).engine_version;
+
+          const event = {
+            event_type:      'TASK_MERGED',
+            engine_version:  engineVersion,
+            timestamp:       new Date().toISOString(),
+            task_id:         taskId,
+            agent:           prAuthor,
+            role:            'ARCHITECT',
+            model,
+            branch:          null,
+            pr_number:       prNumber,
+            forked_from:     null,
+            fork_suffix:     null,
+            override_reason: null,
+            notes:           null,
+            snapshot_index:  null,
+          };
+
+          fs.writeFileSync('/tmp/pending-event.json', JSON.stringify(event));
+          console.log(`Prepared TASK_MERGED event for ${taskId}`);
+          SCRIPT
+        env:
+          PR_BODY:   ${{ github.event.pull_request.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.merged_by.login }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+
+      - name: Append event and push
+        run: |
+          if [ ! -f /tmp/pending-event.json ]; then
+            echo "No pending event — skipping."
+            exit 0
+          fi
+
+          git config user.name  "task-lock[bot]"
+          git config user.email "task-lock[bot]@users.noreply.github.com"
+
+          EVENT_TYPE=$(node -p "require('/tmp/pending-event.json').event_type")
+          TASK_ID=$(node -p "require('/tmp/pending-event.json').task_id || '(system)'")
+
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main 2>/dev/null || true
+
+            if ! node .task-locks/event-writer.mjs \
+                  --event /tmp/pending-event.json \
+                  --no-lock; then
+              echo "event-writer.mjs failed — aborting."
+              exit 1
+            fi
+
+            INDEX=$(node -e "
+              const fs = require('fs');
+              const lines = fs.readFileSync('TASK_EVENTS.jsonl','utf8').trim().split('\n').filter(Boolean);
+              console.log(lines.length - 1);
+            ")
+
+            git add TASK_EVENTS.jsonl
+            git commit -m "[system] event: ${EVENT_TYPE} ${TASK_ID} (index=${INDEX})"
+
+            git push && { echo "Push succeeded on attempt ${attempt}."; break; } || {
+              git reset HEAD~1 -- TASK_EVENTS.jsonl
+              git checkout -- TASK_EVENTS.jsonl
+              git reset --soft HEAD~1
+              sleep $((attempt * 2))
+            }
+          done
+
+  # ---------------------------------------------------------------------------
+  # JOB 3: Handle heartbeat / review-request comments
+  # ---------------------------------------------------------------------------
+  on-comment:
+    if: github.event_name == 'issue_comment' && github.event.issue.pull_request != null
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install js-yaml
+        run: npm install js-yaml --prefix /tmp/nova-lock
+
+      - name: Parse comment and prepare event
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs   = require('fs');
+            const yaml = require('/tmp/nova-lock/node_modules/js-yaml');
+
+            const body      = context.payload.comment.body || '';
+            const commenter = context.payload.comment.user.login;
+            const prNumber  = context.payload.issue.number;
+
+            let eventType = null;
+            if      (/HEARTBEAT/i.test(body))                                  eventType = 'TASK_HEARTBEAT';
+            else if (/request-review|TASK_REVIEW_REQUESTED/i.test(body))       eventType = 'TASK_REVIEW_REQUESTED';
+            else if (/transition-to-refactor|TASK_REFACTOR_REQUESTED/i.test(body)) eventType = 'TASK_REFACTOR_REQUESTED';
+            else if (/refactor-complete|TASK_REFACTOR_COMPLETE/i.test(body))   eventType = 'TASK_REFACTOR_COMPLETE';
+
+            if (!eventType) {
+              core.info('Comment does not match any event keyword — skipping.');
+              return;
+            }
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              pull_number: prNumber,
+            });
+
+            const prBody    = pr.body || '';
+            const taskMatch  = prBody.match(/Task\s*ID:\s*(TASK-\d{4,})/i);
+            const roleMatch  = prBody.match(/Role:\s*(IMPLEMENTATION|REFACTOR|REVIEW|ARCHITECT)/i);
+            const modelMatch = prBody.match(/Model:\s*([^\n\r]+)/i);
+
+            if (!taskMatch) {
+              core.info('No task ID in PR body — cannot write event.');
+              return;
+            }
+
+            const taskId = taskMatch[1];
+            const role   = roleMatch  ? roleMatch[1].toUpperCase()  : 'IMPLEMENTATION';
+            const model  = modelMatch ? modelMatch[1].trim()         : 'unknown';
+
+            const engineVersion = yaml.load(
+              fs.readFileSync('.task-locks/transitions.yaml', 'utf8')
+            ).engine_version;
+
+            const event = {
+              event_type:      eventType,
+              engine_version:  engineVersion,
+              timestamp:       new Date().toISOString(),
+              task_id:         taskId,
+              agent:           commenter,
+              role,
+              model,
+              branch:          pr.head.ref,
+              pr_number:       prNumber,
+              forked_from:     null,
+              fork_suffix:     null,
+              override_reason: null,
+              notes:           body.substring(0, 200),
+              snapshot_index:  null,
+            };
+
+            fs.writeFileSync('/tmp/pending-event.json', JSON.stringify(event));
+            core.info(`Prepared ${eventType} event for ${taskId}`);
+
+      - name: Append event and push
+        run: |
+          if [ ! -f /tmp/pending-event.json ]; then
+            echo "No pending event — skipping."
+            exit 0
+          fi
+
+          git config user.name  "task-lock[bot]"
+          git config user.email "task-lock[bot]@users.noreply.github.com"
+
+          EVENT_TYPE=$(node -p "require('/tmp/pending-event.json').event_type")
+          TASK_ID=$(node -p "require('/tmp/pending-event.json').task_id || '(system)'")
+
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main 2>/dev/null || true
+
+            if ! node .task-locks/event-writer.mjs \
+                  --event /tmp/pending-event.json \
+                  --no-lock; then
+              echo "event-writer.mjs failed — aborting."
+              exit 1
+            fi
+
+            INDEX=$(node -e "
+              const fs = require('fs');
+              const lines = fs.readFileSync('TASK_EVENTS.jsonl','utf8').trim().split('\n').filter(Boolean);
+              console.log(lines.length - 1);
+            ")
+
+            git add TASK_EVENTS.jsonl
+            git commit -m "[system] event: ${EVENT_TYPE} ${TASK_ID} (index=${INDEX})"
+
+            git push && { echo "Push succeeded on attempt ${attempt}."; break; } || {
+              git reset HEAD~1 -- TASK_EVENTS.jsonl
+              git checkout -- TASK_EVENTS.jsonl
+              git reset --soft HEAD~1
+              sleep $((attempt * 2))
+            }
+          done
+
+  # ---------------------------------------------------------------------------
+  # JOB 4: Scheduled TTL expiry scan → TASK_LOCK_EXPIRED events
+  # ---------------------------------------------------------------------------
+  expire-stale-locks:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install js-yaml
+        run: npm install js-yaml --prefix /tmp/nova-lock
+
+      - name: Detect expired locks and prepare events
+        run: |
+          node - <<'SCRIPT'
+          const fs   = require('fs');
+          const yaml = require('/tmp/nova-lock/node_modules/js-yaml');
+
+          const transitions    = yaml.load(fs.readFileSync('.task-locks/transitions.yaml', 'utf8'));
+          const ENGINE_VERSION = transitions.engine_version;
+          const registry       = JSON.parse(fs.readFileSync('.task-locks/registry.json', 'utf8'));
+
+          // Injected time: runner UTC clock.  This is the only place in this
+          // workflow that reads the current time — treat it as authoritative.
+          const now = new Date().toISOString();
+
+          const ACTIVE_LOCK_STATES = new Set(['IN_PROGRESS', 'REFACTOR_CLAIMED', 'REVIEW_LOCKED']);
+          const expiredEvents = [];
+
+          for (const task of registry.tasks) {
+            if (!ACTIVE_LOCK_STATES.has(task.status)) continue;
+            const lock = task.implementation_lock || task.review_lock;
+            if (!lock) continue;
+            if (lock.expires_at && new Date(lock.expires_at) < new Date(now)) {
+              expiredEvents.push({
+                event_type:      'TASK_LOCK_EXPIRED',
+                engine_version:  ENGINE_VERSION,
+                timestamp:       now,
+                task_id:         task.task_id,
+                agent:           null,
+                role:            'system',
+                model:           null,
+                branch:          null,
+                pr_number:       task.pr_number || null,
+                forked_from:     null,
+                fork_suffix:     null,
+                override_reason: null,
+                notes:           `Lock expired at ${lock.expires_at}, detected at ${now}`,
+                snapshot_index:  null,
+              });
+            }
+          }
+
+          if (expiredEvents.length === 0) {
+            console.log('✓ No expired locks found.');
+            process.exit(0);
+          }
+
+          console.log(`Found ${expiredEvents.length} expired lock(s). Writing event files.`);
+
+          // Write each event to a separate file for event-writer.mjs.
+          expiredEvents.forEach((ev, i) => {
+            fs.writeFileSync(`/tmp/expired-event-${i}.json`, JSON.stringify(ev));
+          });
+          fs.writeFileSync('/tmp/expired-count.txt', String(expiredEvents.length));
+          fs.writeFileSync('/tmp/expired-events.json', JSON.stringify(expiredEvents));
+          SCRIPT
+
+      - name: Append expiry events and push
+        run: |
+          if [ ! -f /tmp/expired-count.txt ]; then
+            echo "No expiry events to append."
+            exit 0
+          fi
+
+          git config user.name  "task-lock[bot]"
+          git config user.email "task-lock[bot]@users.noreply.github.com"
+
+          COUNT=$(cat /tmp/expired-count.txt)
+          EXPIRED_IDS=$(node -e "
+            const evs = require('/tmp/expired-events.json');
+            console.log(evs.map(e => e.task_id).join(', '));
+          ")
+
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main 2>/dev/null || true
+
+            # Append each expiry event sequentially through event-writer.mjs.
+            # The writer re-reads HEAD state before each append, so indices
+            # are always correct even after a rebase.
+            WRITE_FAILED=false
+            for i in $(seq 0 $((COUNT - 1))); do
+              if ! node .task-locks/event-writer.mjs \
+                    --event "/tmp/expired-event-${i}.json" \
+                    --no-lock; then
+                echo "event-writer.mjs failed on event ${i} — aborting."
+                WRITE_FAILED=true
+                break
+              fi
+            done
+
+            if [ "$WRITE_FAILED" = "true" ]; then exit 1; fi
+
+            git add TASK_EVENTS.jsonl
+            git commit -m "[system] event: TASK_LOCK_EXPIRED [${EXPIRED_IDS}]"
+
+            git push && { echo "Push succeeded on attempt ${attempt}."; break; } || {
+              echo "Push conflict on attempt ${attempt} — rebasing and retrying..."
+              # Restore TASK_EVENTS.jsonl (undoes all expiry appends this attempt)
+              git reset HEAD~1 -- TASK_EVENTS.jsonl
+              git checkout -- TASK_EVENTS.jsonl
+              git reset --soft HEAD~1
+              sleep $((attempt * 2))
+            }
+          done
+
+      - name: Open GitHub issues for newly expired tasks
+        if: always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('/tmp/expired-events.json')) return;
+
+            const events = JSON.parse(fs.readFileSync('/tmp/expired-events.json', 'utf8'));
+            for (const ev of events) {
+              try {
+                await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo:  context.repo.repo,
+                  title: `⏰ Lock Expired: ${ev.task_id}`,
+                  body: [
+                    `**Task:** ${ev.task_id}`,
+                    `**Expired at:** ${ev.notes}`,
+                    ``,
+                    `The task lock has expired and the state has been set to EXPIRED (terminal).`,
+                    ``,
+                    `To resume work on this task, an **ARCHITECT** must write a \`TASK_FORKED\` event`,
+                    `to create a new fork: \`${ev.task_id}-a\` (or next available suffix).`,
+                    ``,
+                    `See \`.task-locks/transitions.yaml\` for fork rules.`,
+                  ].join('\n'),
+                  labels: ['task-lock-expired', 'automation'],
+                });
+              } catch (err) {
+                core.warning(`Failed to create issue for ${ev.task_id}: ${err.message}`);
+              }
+            }

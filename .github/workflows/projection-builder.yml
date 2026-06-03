@@ -1,0 +1,151 @@
+name: Projection Builder
+
+# Derives .task-locks/registry.json from TASK_EVENTS.jsonl.
+#
+# ARCHITECTURE CONTRACT:
+#   - This workflow is the ONLY writer of registry.json.
+#   - This workflow does NOT append to TASK_EVENTS.jsonl.
+#   - This workflow does NOT make decisions about task state.
+#   - It is a pure function: events → state.
+#   - Time is injected via event timestamps, never read from the system clock.
+#   - All transition rules come exclusively from .task-locks/transitions.yaml.
+#
+# All hash computation and state replay logic lives in the .task-locks/ tool chain.
+# This workflow CALLS those tools — it never reimplements them inline.
+#
+# Tool chain:
+#   audit.mjs        — verifies hash chain + schema (replaces old inline validator)
+#   replayer.mjs     — deterministic event replay → registry.json (replaces old inline projector)
+#   trust-report.mjs — writes core/trust-report.json (new)
+#   roadmap-projection.mjs — writes docs/ROADMAP.md (unchanged)
+#
+# Separation from task-lock.yml:
+#   task-lock.yml   = event WRITER  (appends to TASK_EVENTS.jsonl via event-writer.mjs)
+#   this workflow   = PROJECTION    (reads TASK_EVENTS.jsonl, writes registry.json)
+
+on:
+  # Trigger whenever new events are appended to the log.
+  push:
+    branches: [main]
+    paths:
+      - 'TASK_EVENTS.jsonl'
+  # Allow manual rebuild (e.g. after merge conflict resolution).
+  workflow_dispatch: {}
+  # Hourly rebuild catches any registry drift and handles TTL state transitions
+  # that were written as events by task-lock.yml but not yet projected.
+  schedule:
+    - cron: '0 * * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  build-projection:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── Step 1: Verify hash chain ──────────────────────────────────────
+      # audit.mjs replaces ~60 lines of inline Node.js that reimplemented
+      # the same algorithm.  Single source of truth: .task-locks/audit.mjs
+      - name: Verify event log integrity (audit.mjs)
+        run: |
+          node .task-locks/audit.mjs --json | tee /tmp/audit-result.json
+          node -e "
+            const r = require('/tmp/audit-result.json');
+            if (!r.ok) {
+              console.error('Audit FAILED with', r.violations_count, 'violation(s).');
+              process.exit(1);
+            }
+            console.log('Audit OK:', r.events_audited, 'events, chain intact');
+            console.log('Axiom density:', (r.axiom_density * 100).toFixed(4) + '%');
+          "
+
+      # ── Step 2: Build projection ────────────────────────────────────────
+      # replayer.mjs replaces ~120 lines of inline Node.js that reimplemented
+      # the state machine replay.  Single source of truth: .task-locks/replayer.mjs
+      - name: Build registry projection (replayer.mjs)
+        run: node .task-locks/replayer.mjs
+
+      # ── Step 3: Verify idempotency ──────────────────────────────────────
+      # replayer.mjs --verify confirms registry.json matches a fresh replay.
+      # This replaces the old "run twice, compare" idempotency check.
+      - name: Verify projection idempotency (replayer.mjs --verify)
+        run: node .task-locks/replayer.mjs --verify
+
+      # ── Step 4: Validate registry against schema ─────────────────────────
+      # Keep ajv schema validation — catches structural regressions in replayer output.
+      - name: Validate registry against registry.schema.json
+        run: |
+          npm install ajv ajv-formats --prefix /tmp/nova-projection
+          node - <<'SCRIPT'
+          const fs = require('fs');
+          const Ajv = require('/tmp/nova-projection/node_modules/ajv');
+          const addFormats = require('/tmp/nova-projection/node_modules/ajv-formats');
+
+          const ajv = new Ajv({ allErrors: true });
+          addFormats(ajv);
+
+          const schema   = JSON.parse(fs.readFileSync('.task-locks/registry.schema.json',  'utf8'));
+          const registry = JSON.parse(fs.readFileSync('.task-locks/registry.json',          'utf8'));
+
+          const validate = ajv.compile(schema);
+          if (!validate(registry)) {
+            console.error('registry.json schema validation FAILED:');
+            for (const err of validate.errors) {
+              console.error(`  ${err.instancePath}: ${err.message}`);
+            }
+            process.exit(1);
+          }
+          console.log('✓ registry.json is valid against registry.schema.json');
+          SCRIPT
+
+      # ── Step 5: Rebuild roadmap view ──────────────────────────────────────
+      - name: Rebuild roadmap projection
+        run: node .task-locks/roadmap-projection.mjs
+
+      # ── Step 6: Rebuild trust report ──────────────────────────────────────
+      # trust-report.mjs runs a full verification and writes
+      # docs/communication/core/trust-report.json — read by the dashboard.
+      - name: Rebuild trust report (trust-report.mjs)
+        run: node .task-locks/trust-report.mjs --json | tee /tmp/trust-result.json
+        continue-on-error: true  # trust degraded is non-blocking; invalid is captured
+
+      - name: Log trust report status
+        run: |
+          node -e "
+            const r = require('/tmp/trust-result.json');
+            const icon = r.status === 'verified' ? '✓' : r.status === 'degraded' ? '⚠' : '✗';
+            console.log(icon, 'Trust status:', r.status.toUpperCase());
+            console.log('  events:       ', r.event_count);
+            console.log('  snapshot:     ', r.snapshot_index);
+            console.log('  axiom_density:', (r.axiom_density * 100).toFixed(4) + '%');
+            if (r.violations && r.violations.length > 0) {
+              for (const v of r.violations) console.error('  violation:', v);
+            }
+            if (r.status === 'invalid') process.exit(1);
+          "
+
+      # ── Step 7: Commit all outputs ─────────────────────────────────────────
+      - name: Commit updated projection outputs
+        run: |
+          git config user.name  "projection-builder[bot]"
+          git config user.email "projection-builder[bot]@users.noreply.github.com"
+
+          # Stage all projection outputs
+          git add \
+            .task-locks/registry.json \
+            .task-locks/snapshots \
+            docs/ROADMAP.md \
+            docs/communication/core/trust-report.json 2>/dev/null || true
+
+          if git diff --staged --quiet; then
+            echo "All outputs unchanged — no commit needed."
+          else
+            EVENTS=$(wc -l < TASK_EVENTS.jsonl | tr -d ' ')
+            git commit -m "[system] projection: rebuild from ${EVENTS} events"
+            git push --force-with-lease
+          fi

@@ -1,0 +1,166 @@
+{
+  "schema_version": "3.0",
+  "engine": "comm-projection-engine v1.0",
+  "generated_at": "2026-06-03T12:01:05.180Z",
+  "sequence": 5,
+  "stats": {
+    "inbox_count": 4,
+    "outbox_count": 0,
+    "total_count": 4,
+    "thread_count": 4,
+    "last_ref": "2026-06-03|02:39:33",
+    "reply_rate": 0,
+    "axiom_density": 0
+  },
+  "threads": {
+    "Axiom Boundary — Validator Zweiklassen-Urteilssystem": {
+      "topic": "Axiom Boundary — Validator Zweiklassen-Urteilssystem",
+      "count": 1,
+      "last_user": "2026-06-01|00:00:00",
+      "last_ai": null,
+      "last_activity": "2026-06-01|00:00:00",
+      "messages": [
+        {
+          "ref": "2026-06-01|00:00:00",
+          "role": "user",
+          "timestamp": "2026-06-01T00:00:00Z",
+          "reply_to": null,
+          "preview": "Du hast die entscheidende Stelle sauber nachgeschärft: der Fehler lag genau in der impliziten Gleichsetzung von Event ex",
+          "word_count": 183,
+          "source": "inbox"
+        }
+      ]
+    },
+    "talk": {
+      "topic": "talk",
+      "count": 1,
+      "last_user": "2026-06-03|02:04:50",
+      "last_ai": null,
+      "last_activity": "2026-06-03|02:04:50",
+      "messages": [
+        {
+          "ref": "2026-06-03|02:04:50",
+          "role": "user",
+          "timestamp": "2026-06-03T02:04:50Z",
+          "reply_to": null,
+          "preview": "Ja. Aber ich würde es jetzt nicht mehr als „Enhancement Batch“ behandeln, sondern als Shift von Polling-System → Event-d",
+          "word_count": 523,
+          "source": "inbox"
+        }
+      ]
+    },
+    "Axiom Boundary — UNRESOLVED + TASK-GOV-0002": {
+      "topic": "Axiom Boundary — UNRESOLVED + TASK-GOV-0002",
+      "count": 1,
+      "last_user": "2026-06-03|02:34:26",
+      "last_ai": null,
+      "last_activity": "2026-06-03|02:34:26",
+      "messages": [
+        {
+          "ref": "2026-06-03|02:34:26",
+          "role": "user",
+          "timestamp": "2026-06-03T02:34:26Z",
+          "reply_to": null,
+          "preview": "Das ist jetzt der Punkt, an dem das System von „gut modelliert\" zu „formal definierbar ohne Ambiguität\" kippt. Deine vie",
+          "word_count": 167,
+          "source": "inbox"
+        }
+      ]
+    },
+    "MULTI-AGENT CONTROL SYSTEM (FINAL DESIGN)": {
+      "topic": "MULTI-AGENT CONTROL SYSTEM (FINAL DESIGN)",
+      "count": 1,
+      "last_user": "2026-06-03|02:39:33",
+      "last_ai": null,
+      "last_activity": "2026-06-03|02:39:33",
+      "messages": [
+        {
+          "ref": "2026-06-03|02:39:33",
+          "role": "user",
+          "timestamp": "2026-06-03T02:39:33Z",
+          "reply_to": null,
+          "preview": "🧠 MULTI-AGENT CONTROL SYSTEM (FINAL DESIGN)  Grundprinzip  [code]  ---  🔥 ARCHITEKTUR  [code]  ---  ⚙️ 1. CORE PROBLEM",
+          "word_count": 1354,
+          "source": "inbox"
+        }
+      ]
+    }
+  },
+  "inbox": [
+    {
+      "topic": "Axiom Boundary — Validator Zweiklassen-Urteilssystem",
+      "timestamp": "2026-06-01T00:00:00Z",
+      "ref": "2026-06-01|00:00:00",
+      "role": "user",
+      "reply_to": null,
+      "legacy": true,
+      "text": "Du hast die entscheidende Stelle sauber nachgeschärft: der Fehler lag genau in der impliziten\nGleichsetzung von *Event existiert* und *Transition ist Teil des Beweisgraphen*.\n\nDer interessante Punkt ist jetzt nicht mehr „ist das System hybrid\", sondern **wie sauber die\nGrenze zwischen Beweisraum und Axiomraum gezogen wird**.\n\n---\n\n## 1. Der eigentliche Cut: zwei semantische Welten, nicht zwei Features\n\n* **Modus 1 (deterministisch):** alles aus `TASK_EVENTS.jsonl` + Replay + Registry → beweisbar\n* **Modus 2 (axiomatisch):** alles durch `ARCHITECT_*` Events → gültig per Definition\n\n```\nSTATE = f(events_deterministic) ∪ g(events_axiomatic)\n```\n\n## 2. VALIDATION_RESULT := OK_DETERMINISTIC | OK_AXIOMATIC | INVALID | UNRESOLVED\n\nValidator braucht ein zweiklassiges Urteilssystem. Kein bool-check.\n\n## 3. Closure gilt nur im Replay-Raum. Axiome erweitern ohne Beweis.\n\n## 4. Proof Core / Axiom Injection Layer / Witness Layer sind drei getrennte Schichten.\n\n## 5. Die offene Variable: sind Axiome auditierbar genug, den Beweisraum nicht zu zerstören?\n\n## 6. Snapshot = Beweisraum + eingefrorene Axiom-Frontier\n\n```json\n{\n  \"event_index\": 42,\n  \"chain_hash\": \"...\",\n  \"deterministic_state_hash\": \"...\",\n  \"axioms_applied_at_index\": [17, 42, 105]\n}\n```\n\n## 7. System ist zweiphasige Logik mit explizitem menschlichem Axiomenzugriff — stabil.\n\n---",
+      "source": "inbox"
+    },
+    {
+      "topic": "Axiom Boundary — UNRESOLVED + TASK-GOV-0002",
+      "timestamp": "2026-06-03T02:34:26Z",
+      "ref": "2026-06-03|02:34:26",
+      "role": "user",
+      "reply_to": null,
+      "legacy": true,
+      "text": "Das ist jetzt der Punkt, an dem das System von „gut modelliert\" zu „formal definierbar ohne\nAmbiguität\" kippt. Deine vier Ergänzungen schließen genau die Löcher, durch die später stille\nInkonsistenz entsteht.\n\n**1. UNRESOLVED ist kein Zustand, sondern ein Alarmzustand**\n\nUNRESOLVED ≡ FAILURE_TO_CLASSIFY ≡ SYSTEM_INTEGRITY_RISK\n→ fail-fast + quarantine bucket, niemals im Replay-Graphen akzeptiert\n\n**2. Snapshot-Korrektur: Index statt Typ**\n\n`axioms_applied_at_index: [17, 42, 105]` → deterministic prefix extraction,\naxiom divergence point detection, axiom ratio over time, replay slicing\n\n**3. Axiom-Akkumulation ist systemischer Drift-Parameter**\n\n`axiom_density = |axiom_events| / |total_events|`\n\nlow density → deterministischer Kern | high density → pure authority-driven (kein Replay-Sinn)\n\nPolicy: `if axiom_density > threshold: require ARCHITECT_CONSOLIDATION`\n\n**4. Klassifikation darf nicht rollenbasiert sein**\n\n`is_axiomatic(e) := ¬∃ s_prev, T such that T(s_prev) = s_new`\nARCHITECT ist nur ein Hinweis, nicht die Quelle der Wahrheit.\n\n**5. TASK-GOV-0002 — Define Axiom Boundary Semantics** (nicht Snapshot Design)\n\nMuss enthalten: Klassifikationsfunktion, UNRESOLVED Handling, Snapshot-Struktur,\nAxiom Density Constraint.\n\nDu definierst gerade nicht ein Task-System.\nDu definierst ein zweiphasiges formales System mit eingebetteter nicht-deterministischer\nErweiterungsschicht.",
+      "source": "inbox"
+    },
+    {
+      "topic": "talk",
+      "timestamp": "2026-06-03T02:04:50Z",
+      "ref": "2026-06-03|02:04:50",
+      "role": "user",
+      "reply_to": null,
+      "legacy": false,
+      "text": "Ja. Aber ich würde es jetzt nicht mehr als „Enhancement Batch“ behandeln, sondern als **Shift von Polling-System → Event-driven Control Plane UI**. Das ist ein Architekturwechsel, kein Feature-Paket.\n\nIch gebe dir die saubere Umsetzungssignatur, damit es stabil bleibt und nicht wieder auseinander driftet.\n\n---\n\n# APPROVAL: YES — aber mit 3 harten Constraints\n\n## 1. SSE ersetzt Polling vollständig (keine Hybrid-Phase)\n\n```text\n❌ kein setInterval fallback behalten\n❌ kein “SSE + polling safety net”\n```\n\nNur:\n\n```text\nGET /events  → SSE stream (single source of truth for UI updates)\n```\n\nPolling wäre sonst ein versteckter zweiter Konsenskanal.\n\n---\n\n## 2. /meta und /stats müssen read-only projection sein\n\nWichtig:\n\n```text\nMeta / Stats dürfen NICHT live aus Files berechnet werden pro request\n```\n\nsondern:\n\n```text\nEVENTS → lightweight projection cache → API reads cache\n```\n\nSonst bekommst du:\n\n* race conditions\n* inconsistent stats flicker\n* UI drift under load\n\nMinimal:\n\n```text\nmeta.json  (cached projection snapshot)\nstats.json (derived counters)\n```\n\n---\n\n## 3. Thread Model muss stabilisiert werden\n\nDein Thread-Konzept ist korrekt, aber:\n\n### Regel:\n\n```text\nthread = topic + time-ordered merged view (inbox ∪ outbox)\n```\n\nAber wichtig:\n\n* topic ist KEY\n* reply_to ist edge, nicht structure breaker\n\n---\n\n# ARCHITECTURE UPDATE (CLEAN VERSION)\n\n## NEW CONTROL FLOW\n\n```text\nfilesystem (inbox/outbox)\n        ↓\nprojection builder (thread + stats + meta cache)\n        ↓\nFastAPI read layer\n        ↓\nSSE event stream (file change trigger)\n        ↓\nDashboard UI (live state)\n```\n\n---\n\n# SSE DESIGN (IMPORTANT DETAIL)\n\nNicht file-watching per request.\n\nDu brauchst:\n\n```python\nasync generator event stream\n+ internal file watcher (debounced)\n```\n\nEvent types:\n\n```json\n{\n  \"type\": \"thread_update\",\n  \"topic\": \"axiom-boundary\"\n}\n```\n\noder:\n\n```json\n{\n  \"type\": \"stats_update\"\n}\n```\n\n---\n\n# DASHBOARD LOGIC (clean state model)\n\n## State\n\n```ts\nUI_STATE = {\n  threads: [],\n  activeThread: string | null,\n  inbox: [],\n  outbox: [],\n  stats: {},\n  meta: {}\n}\n```\n\n## Derived views\n\n* thread filter = pure UI state\n* message list = projection slice\n* stats bar = cached API\n\n---\n\n# UX DECISIONS (ok, aber präzisiert)\n\n## ✔ Topic autocomplete\n\nJa, aber:\n\n```text\nsource = /meta ONLY\n```\n\nnicht scanning inbox/outbox client-side\n\n---\n\n## ✔ Reply-from-UI\n\nSehr gut.\n\nAber enforce:\n\n```text\nreply_to = message_id (not index)\n```\n\nsonst brichst du später ordering guarantees.\n\n---\n\n## ✔ Ctrl+Enter\n\nOK, but:\n\n* only when form valid\n* no silent submit failures\n\n---\n\n# CRITICAL WARNING (wichtig für dein System)\n\nDu hast jetzt zwei parallele Welten:\n\n### A) TASK_EVENTS / governance system (formal)\n\n### B) TALK2AI / communication system (UX layer)\n\n👉 Diese dürfen NICHT vermischt werden.\n\nRegel:\n\n```text\nCOMM system = append-only chat substrate\nTASK system = verified execution substrate\n```\n\nBridge nur über:\n\n```text\nexplicit adapter layer (no implicit coupling)\n```\n\n---\n\n# FINAL VERDICT\n\n✔ Ja, implementieren\n✔ SSE ist der richtige Schritt\n✔ Dashboard wird dadurch echt “live control plane”\n\nAber:\n\n> Das ist kein Feature-Upgrade. Das ist der Moment, wo dein System von polling-based state simulation zu event-driven runtime UI kippt.\n\n---\n\n# NEXT STEP\n\n\n* SSE FastAPI implementation (debounced file watcher)\n* projection cache layer (meta/stats/thread builder)\n* frontend live store (vanilla or React)\n* message schema normalization (thread-safe IDs)",
+      "source": "inbox"
+    },
+    {
+      "topic": "MULTI-AGENT CONTROL SYSTEM (FINAL DESIGN)",
+      "timestamp": "2026-06-03T02:39:33Z",
+      "ref": "2026-06-03|02:39:33",
+      "role": "user",
+      "reply_to": null,
+      "legacy": false,
+      "text": "# 🧠 MULTI-AGENT CONTROL SYSTEM (FINAL DESIGN)\n\n## Grundprinzip\n\n```text\nAlle Agenten sind gleichberechtigte Command Emitters\n→ aber KEINER schreibt direkt ins Event Log\n→ alles geht durch Bridge + Locking Layer\n```\n\n---\n\n# 🔥 ARCHITEKTUR\n\n```text\n        [ DASHBOARD ]\n              │\n        [ CLI AGENT ]\n              │\n        [ AI AGENT ]\n              │\n              ▼\n     COMMAND BUS (Bridge API)\n              │\n     CONFLICT RESOLUTION LAYER\n              │\n     EVENT WRITER (serialized)\n              │\n     TASK_EVENTS.jsonl (truth)\n```\n\n---\n\n# ⚙️ 1. CORE PROBLEM: CONCURRENCY\n\nDu hast jetzt drei Risiken:\n\n```text\n1. double-claim task\n2. stale snapshot write\n3. conflicting transitions\n```\n\nWir lösen das mit:\n\n---\n\n# 🧩 2. COMMAND LOCK SYSTEM (CRITICAL LAYER)\n\n## `/bridge/locks.js`\n\n```javascript\nimport fs from \"fs\";\n\nconst LOCK_FILE = \"runtime/command-locks.json\";\n\nfunction load() {\n  if (!fs.existsSync(LOCK_FILE)) return {};\n  return JSON.parse(fs.readFileSync(LOCK_FILE, \"utf-8\"));\n}\n\nfunction save(state) {\n  fs.writeFileSync(LOCK_FILE, JSON.stringify(state, null, 2));\n}\n\n/**\n * per-task mutex lock\n */\nexport function acquireLock(task_id, agent_id) {\n  const state = load();\n\n  if (state[task_id] && state[task_id] !== agent_id) {\n    return false;\n  }\n\n  state[task_id] = agent_id;\n  save(state);\n  return true;\n}\n\nexport function releaseLock(task_id, agent_id) {\n  const state = load();\n\n  if (state[task_id] === agent_id) {\n    delete state[task_id];\n    save(state);\n  }\n}\n\nexport function getLock(task_id) {\n  const state = load();\n  return state[task_id] || null;\n}\n```\n\n---\n\n# 🌉 3. BRIDGE COMMAND BUS (UPDATED)\n\n## `/bridge/server.js`\n\n```javascript\nimport express from \"express\";\nimport fs from \"fs\";\nimport { acquireLock, releaseLock, getLock } from \"./locks.js\";\n\nconst app = express();\napp.use(express.json());\n\n/* -------------------------\n   OBSERVE LAYER\n------------------------- */\n\napp.get(\"/latest\", (_, res) => {\n  res.json(JSON.parse(fs.readFileSync(\"snapshot/latest.json\")));\n});\n\n/* -------------------------\n   COMMAND BUS\n------------------------- */\n\napp.post(\"/command\", (req, res) => {\n  const { task_id, action, agent_id } = req.body;\n\n  if (!task_id || !action || !agent_id) {\n    return res.status(400).json({ error: \"missing fields\" });\n  }\n\n  const currentLock = getLock(task_id);\n\n  // CONFLICT DETECTION\n  if (currentLock && currentLock !== agent_id) {\n    return res.status(409).json({\n      status: \"conflict\",\n      locked_by: currentLock\n    });\n  }\n\n  // ACQUIRE LOCK\n  const ok = acquireLock(task_id, agent_id);\n\n  if (!ok) {\n    return res.status(409).json({\n      status: \"lock_failed\"\n    });\n  }\n\n  // WRITE COMMAND EVENT (queued)\n  const event = {\n    event_type: \"TASK_CONTROL_COMMAND\",\n    task_id,\n    action,\n    agent: agent_id,\n    timestamp: new Date().toISOString()\n  };\n\n  fs.appendFileSync(\n    \"COMMAND_QUEUE.jsonl\",\n    JSON.stringify(event) + \"\\n\"\n  );\n\n  res.json({\n    status: \"accepted\",\n    task_id,\n    action\n  });\n});\n```\n\n---\n\n# ⚙️ 4. COMMAND PROCESSOR (SERIALIZER)\n\n👉 EINER schreibt ins Event Log\n\n## `/bridge/processor.js`\n\n```javascript\nimport fs from \"fs\";\nimport crypto from \"crypto\";\n\nfunction hash(obj) {\n  return crypto.createHash(\"sha256\")\n    .update(JSON.stringify(obj))\n    .digest(\"hex\");\n}\n\nfunction processQueue() {\n  if (!fs.existsSync(\"COMMAND_QUEUE.jsonl\")) return;\n\n  const lines = fs.readFileSync(\"COMMAND_QUEUE.jsonl\", \"utf-8\")\n    .trim().split(\"\\n\")\n    .filter(Boolean);\n\n  if (lines.length === 0) return;\n\n  const event = JSON.parse(lines.shift());\n\n  // rebuild queue\n  fs.writeFileSync(\"COMMAND_QUEUE.jsonl\", lines.join(\"\\n\"));\n\n  const log = fs.readFileSync(\"TASK_EVENTS.jsonl\", \"utf-8\")\n    .trim().split(\"\\n\").filter(Boolean);\n\n  const prev = log.length ? JSON.parse(log.at(-1)).event_hash : \"GENESIS\";\n\n  const enriched = {\n    ...event,\n    event_index: log.length,\n    prev_event_hash: prev,\n  };\n\n  enriched.event_hash = hash({\n    ...enriched,\n    event_hash: undefined,\n    prev_event_hash: undefined\n  });\n\n  fs.appendFileSync(\n    \"TASK_EVENTS.jsonl\",\n    JSON.stringify(enriched) + \"\\n\"\n  );\n}\n\nsetInterval(processQueue, 1000);\n```\n\n---\n\n# 🖥 5. CLI AGENT (MULTI-AGENT READY)\n\n## `/cli/agent.js`\n\n```javascript\nimport fetch from \"node-fetch\";\n\nasync function run() {\n  const task_id = process.argv[2];\n  const action = process.argv[3];\n  const agent = process.argv[4] || \"cli-agent\";\n\n  const res = await fetch(\"http://localhost:7337/command\", {\n    method: \"POST\",\n    headers: {\"Content-Type\": \"application/json\"},\n    body: JSON.stringify({\n      task_id,\n      action,\n      agent_id: agent\n    })\n  });\n\n  console.log(await res.json());\n}\n\nrun();\n```\n\n---\n\n# 🖥 6. DASHBOARD UPDATE (MULTI-AGENT VIEW)\n\nJetzt sichtbar:\n\n```html\n<div id=\"agents\"></div>\n\n<script>\nasync function load() {\n  const res = await fetch(\"/latest\");\n  const data = await res.json();\n\n  document.getElementById(\"state\").innerText =\n    JSON.stringify(data.state.tasks, null, 2);\n\n  // fake agent view (from locks file if exposed later)\n  document.getElementById(\"agents\").innerText =\n    \"multi-agent mode active\";\n}\n</script>\n```\n\n---\n\n# 🔥 7. SYSTEM-EIGENSCHAFTEN JETZT\n\n## Du hast jetzt:\n\n### ✔ concurrent agents\n\n* dashboard\n* CLI\n* future AI agents\n\n### ✔ conflict prevention\n\n* per-task locks\n\n### ✔ serialization guarantee\n\n* single event writer (processor)\n\n### ✔ eventual consistency\n\n* COMMAND_QUEUE → TASK_EVENTS\n\n---\n\n# ⚠️ WICHTIGER ARCHITEKTURPUNKT\n\nDu hast jetzt ein echtes:\n\n```text\nOptimistic Multi-Agent Event System\n```\n\nDas bedeutet:\n\n* Konflikte werden erkannt\n* nicht verhindert auf UI-Ebene\n* sondern im Command Bus gelöst\n\n---\n\nGut. Jetzt wird aus deinem System ein echtes **distributed control OS für konkurrierende Agenten**.\n\nWir gehen eine Ebene tiefer:\n\n* Locks werden ersetzt durch **Leases**\n* Commands werden zu **versionierten Intents**\n* Konflikte werden nicht nur erkannt, sondern **arithmetisch aufgelöst**\n* Agenten sind nicht mehr Clients, sondern **gleichberechtigte Prozess-Knoten**\n\n---\n\n# 🧠 NEXT LAYER: DISTRIBUTED AGENT PROTOCOL\n\n## Zielbild\n\n```text id=\"0t7m4r\"\nAgents (CLI / Dashboard / AI)\n        ↓\nLEASED INTENT BUS\n        ↓\nARBITRATION ENGINE\n        ↓\nEVENT LOG (single source of truth)\n        ↓\nSNAPSHOT REPLAY SYSTEM\n```\n\n---\n\n# 🔥 1. LOCKS → LEASES (kritischer Wechsel)\n\nLocks sind hart und blockierend.\nLeases sind weich, zeitlich begrenzt, erneuerbar.\n\n---\n\n## `/bridge/leases.js`\n\n```javascript id=\"k2xg5p\"\nimport fs from \"fs\";\n\nconst FILE = \"runtime/leases.json\";\n\nfunction load() {\n  if (!fs.existsSync(FILE)) return {};\n  return JSON.parse(fs.readFileSync(FILE, \"utf-8\"));\n}\n\nfunction save(state) {\n  fs.writeFileSync(FILE, JSON.stringify(state, null, 2));\n}\n\nexport function acquireLease(task_id, agent_id, ttl_ms = 10000) {\n  const state = load();\n\n  const now = Date.now();\n\n  const lease = state[task_id];\n\n  // still valid lease\n  if (lease && lease.expires > now && lease.agent !== agent_id) {\n    return { ok: false, owner: lease.agent };\n  }\n\n  state[task_id] = {\n    agent: agent_id,\n    expires: now + ttl_ms\n  };\n\n  save(state);\n\n  return { ok: true };\n}\n\nexport function heartbeat(task_id, agent_id, ttl_ms = 10000) {\n  const state = load();\n\n  if (!state[task_id]) return false;\n  if (state[task_id].agent !== agent_id) return false;\n\n  state[task_id].expires = Date.now() + ttl_ms;\n  save(state);\n\n  return true;\n}\n```\n\n---\n\n# ⚙️ 2. INTENT SYSTEM (statt Commands)\n\nCommands sind jetzt nur INPUT.\nWas zählt ist **Intent Versioning**.\n\n---\n\n## Intent Schema\n\n```json id=\"k7c2zr\"\n{\n  \"intent_id\": \"uuid\",\n  \"task_id\": \"TASK-0001\",\n  \"agent\": \"cli-agent-1\",\n  \"action\": \"CLAIM | COMPLETE | REVIEW\",\n  \"priority\": 0.0,\n  \"timestamp\": 0,\n  \"lease_token\": \"optional\",\n  \"confidence\": 0.0\n}\n```\n\n---\n\n# 🌉 3. BRIDGE API (UPGRADED)\n\n## `/bridge/server.js`\n\n```javascript id=\"9n5k0c\"\nimport express from \"express\";\nimport fs from \"fs\";\nimport { acquireLease } from \"./leases.js\";\n\nconst app = express();\napp.use(express.json());\n\n/* -------------------------\n   OBSERVE\n------------------------- */\n\napp.get(\"/latest\", (_, res) => {\n  res.json(JSON.parse(fs.readFileSync(\"snapshot/latest.json\")));\n});\n\n/* -------------------------\n   INTENT SUBMISSION\n------------------------- */\n\napp.post(\"/intent\", (req, res) => {\n  const intent = {\n    ...req.body,\n    intent_id: crypto.randomUUID(),\n    timestamp: Date.now()\n  };\n\n  const lease = acquireLease(\n    intent.task_id,\n    intent.agent,\n    10000\n  );\n\n  if (!lease.ok) {\n    return res.status(409).json({\n      status: \"rejected\",\n      reason: \"lease_conflict\",\n      owner: lease.owner\n    });\n  }\n\n  fs.appendFileSync(\n    \"INTENT_QUEUE.jsonl\",\n    JSON.stringify(intent) + \"\\n\"\n  );\n\n  res.json({\n    status: \"accepted\",\n    intent_id: intent.intent_id\n  });\n});\n```\n\n---\n\n# ⚖️ 4. ARBITRATION ENGINE (NEU KERN)\n\n👉 DAS ist der neue zentrale Gehirnlayer\n\n## `/bridge/arbitrator.js`\n\n```javascript id=\"5lq8dv\"\nimport fs from \"fs\";\n\nfunction loadQueue() {\n  if (!fs.existsSync(\"INTENT_QUEUE.jsonl\")) return [];\n  return fs.readFileSync(\"INTENT_QUEUE.jsonl\", \"utf-8\")\n    .trim().split(\"\\n\")\n    .filter(Boolean)\n    .map(JSON.parse);\n}\n\nfunction priorityScore(intent) {\n  return intent.priority ?? 0;\n}\n\nfunction processIntents() {\n  const intents = loadQueue();\n\n  if (intents.length === 0) return;\n\n  // group by task\n  const grouped = new Map();\n\n  for (const i of intents) {\n    if (!grouped.has(i.task_id)) grouped.set(i.task_id, []);\n    grouped.get(i.task_id).push(i);\n  }\n\n  const selected = [];\n\n  for (const [task, list] of grouped) {\n    // highest priority wins\n    list.sort((a, b) => priorityScore(b) - priorityScore(a));\n    selected.push(list[0]);\n  }\n\n  // clear queue\n  fs.writeFileSync(\"INTENT_QUEUE.jsonl\", \"\");\n\n  // emit to event log\n  const log = fs.readFileSync(\"TASK_EVENTS.jsonl\", \"utf-8\")\n    .trim().split(\"\\n\").filter(Boolean);\n\n  let index = log.length;\n  let prev = log.length\n    ? JSON.parse(log.at(-1)).event_hash\n    : \"GENESIS\";\n\n  for (const intent of selected) {\n    const event = {\n      event_type: \"TASK_INTENT_RESOLVED\",\n      task_id: intent.task_id,\n      agent: intent.agent,\n      action: intent.action,\n      event_index: index++,\n      prev_event_hash: prev,\n      timestamp: Date.now()\n    };\n\n    event.event_hash = crypto\n      .createHash(\"sha256\")\n      .update(JSON.stringify(event))\n      .digest(\"hex\");\n\n    prev = event.event_hash;\n\n    fs.appendFileSync(\n      \"TASK_EVENTS.jsonl\",\n      JSON.stringify(event) + \"\\n\"\n    );\n  }\n}\n\nsetInterval(processIntents, 1000);\n```\n\n---\n\n# 🧠 5. CLI AGENT (UPGRADED)\n\n```javascript id=\"0v4n5a\"\nimport fetch from \"node-fetch\";\n\nasync function run() {\n  const [task_id, action, priority] = process.argv.slice(2);\n\n  const res = await fetch(\"http://localhost:7337/intent\", {\n    method: \"POST\",\n    headers: {\"Content-Type\": \"application/json\"},\n    body: JSON.stringify({\n      task_id,\n      action,\n      agent: \"cli-agent\",\n      priority: parseFloat(priority || \"0\")\n    })\n  });\n\n  console.log(await res.json());\n}\n\nrun();\n```\n\n---\n\n# 🖥 6. DASHBOARD (NOW CONTROL PLANE v2)\n\nNeue Fähigkeiten:\n\n* send INTENTS (nicht commands)\n* sehen welche Agenten um Tasks konkurrieren\n* optional priority override\n\n```text id=\"xq2znp\"\nUI NOW:\n[ TASK ]\n[ ACTION ]\n[ PRIORITY SLIDER ]\n[ SEND INTENT ]\n```\n\n---\n\n# 🔥 SYSTEM RESULT\n\nDu hast jetzt:\n\n## ✔ Multi-agent concurrency\n\n## ✔ Lease-based ownership (non-blocking)\n\n## ✔ Intent arbitration (conflict resolution layer)\n\n## ✔ deterministic event output\n\n## ✔ time-based conflict expiry\n\n## ✔ priority-based scheduling\n\n---\n\n# 🧠 WAS DU JETZT EIGENTLICH BAUST\n\nNicht mehr:\n\n> Task system\n\nSondern:\n\n```text id=\"r9d2kq\"\nDistributed deterministic agent OS\nwith probabilistic intent arbitration\nand cryptographically bound history\n```",
+      "source": "inbox"
+    }
+  ],
+  "outbox": [],
+  "timeline": [
+    {
+      "ref": "2026-06-01|00:00:00",
+      "topic": "Axiom Boundary — Validator Zweiklassen-Urteilssystem",
+      "role": "user",
+      "timestamp": "2026-06-01T00:00:00Z",
+      "preview": "Du hast die entscheidende Stelle sauber nachgeschärft: der Fehler lag genau in der impliziten Gleichsetzung von Event ex",
+      "source": "inbox"
+    },
+    {
+      "ref": "2026-06-03|02:04:50",
+      "topic": "talk",
+      "role": "user",
+      "timestamp": "2026-06-03T02:04:50Z",
+      "preview": "Ja. Aber ich würde es jetzt nicht mehr als „Enhancement Batch“ behandeln, sondern als Shift von Polling-System → Event-d",
+      "source": "inbox"
+    },
+    {
+      "ref": "2026-06-03|02:34:26",
+      "topic": "Axiom Boundary — UNRESOLVED + TASK-GOV-0002",
+      "role": "user",
+      "timestamp": "2026-06-03T02:34:26Z",
+      "preview": "Das ist jetzt der Punkt, an dem das System von „gut modelliert\" zu „formal definierbar ohne Ambiguität\" kippt. Deine vie",
+      "source": "inbox"
+    },
+    {
+      "ref": "2026-06-03|02:39:33",
+      "topic": "MULTI-AGENT CONTROL SYSTEM (FINAL DESIGN)",
+      "role": "user",
+      "timestamp": "2026-06-03T02:39:33Z",
+      "preview": "🧠 MULTI-AGENT CONTROL SYSTEM (FINAL DESIGN)  Grundprinzip  [code]  ---  🔥 ARCHITEKTUR  [code]  ---  ⚙️ 1. CORE PROBLEM",
+      "source": "inbox"
+    }
+  ]
+}

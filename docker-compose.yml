@@ -1,0 +1,79 @@
+version: "3.9"
+
+# event-os-core — Docker Compose stack
+#
+# Services:
+#   core-api      FastAPI HTTP bridge (port 7337)
+#   decision-engine Deterministic decision engine (compat: scheduler.mjs)
+#   engine        Audit watcher (integrity daemon)
+#   economy       Bid projection watcher
+#   lmstudio      LM Studio inference daemon (port 1234)
+#
+# Volumes:
+#   app-data      Shared app state (TASK_EVENTS.jsonl, registry.json, etc.)
+#
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f core-api
+
+services:
+
+  core-api:
+    build: .
+    command: >
+      sh -c "cd decision && python3 api/server.py"
+    ports:
+      - "7337:7337"
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7337/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  decision-engine:
+    build: .
+    command: >
+      sh -c "while true; do node .task-locks/decision_engine.mjs; sleep 60; done"
+    volumes:
+      - .:/app
+    restart: unless-stopped
+    depends_on:
+      - core-api
+
+  engine:
+    build: .
+    command: >
+      sh -c "while true; do node .task-locks/audit.mjs --no-snapshot --json; sleep 120; done"
+    volumes:
+      - .:/app
+    restart: unless-stopped
+
+  economy:
+    build: .
+    command: >
+      sh -c "while true; do node economy/bid_projection.mjs --json 2>/dev/null || true; sleep 30; done"
+    volumes:
+      - .:/app
+    restart: unless-stopped
+    depends_on:
+      - core-api
+
+  # Optional: LM Studio daemon for TAP/LLM operations
+  # Requires llmster to be installed on the host and model pulled first.
+  # Uncomment when ready:
+  #
+  # lmstudio:
+  #   image: ghcr.io/lmstudio-ai/llmster:latest
+  #   ports:
+  #     - "1234:1234"
+  #   volumes:
+  #     - lmstudio-models:/root/.lmstudio/models
+  #   restart: unless-stopped
+
+volumes:
+  # lmstudio-models:

@@ -1,0 +1,236 @@
+# Drift Prevention Rules
+# Version: 2.0
+#
+# This file is the ONLY source of rules for drift-detector.yml.
+# Do NOT hardcode patterns in the workflow.
+# All detector types are configured here.
+
+version: "2.0"
+
+# ---------------------------------------------------------------------------
+# AUTHORITATIVE FILES
+#
+# Three runtime files hold system truth. One bootstrap manifest defines genesis tasks.
+# No Markdown file may be treated as authoritative input to CI or state derivation.
+#
+#   event_log        - history (append-only, never edited)
+#   rule_source      - transitions (only source of state machine logic)
+#   genesis_manifest - bootstrap task set
+#   state_projection - derived state (written only by projection-builder)
+#
+# These are file paths, not a "layer model". Do not extend this list
+# without a full Architect RFC. The genesis manifest is bootstrap input only,
+# not mutable runtime state.
+# ---------------------------------------------------------------------------
+authoritative_files:
+  event_log:        "TASK_EVENTS.jsonl"
+  rule_source:      ".task-locks/transitions.yaml"
+  genesis_manifest: ".task-locks/genesis.json"
+  state_projection: ".task-locks/registry.json"
+
+# ---------------------------------------------------------------------------
+# TYPE A — State Leakage
+# Severity: hard_fail
+#
+# A file exists that stores task/agent state independently of registry.json.
+# The detector matches files by name pattern (glob) anywhere in the repo.
+# ---------------------------------------------------------------------------
+type_a_state_leakage:
+  description: "Files storing state outside registry.json"
+  severity: hard_fail
+  forbidden_name_patterns:
+    - "TASK_STATE*"
+    - "AGENT_ASSIGNMENTS*"
+    - "*_assignments.json"
+    - "*_assignments.yaml"
+    - "workflow_state*"
+    - "current_task*"
+    - "agent_state*"
+    - "locks.yaml"
+  exceptions:
+    - ".task-locks/registry.json"
+    - ".task-locks/transitions.yaml"
+    - ".task-locks/genesis.json"
+    - ".task-locks/drift-rules.yaml"
+    - ".task-locks/event.schema.json"
+    - ".task-locks/registry.schema.json"
+    - "TASK_EVENTS.jsonl"
+
+# ---------------------------------------------------------------------------
+# TYPE B — Logic Duplication
+# Severity: hard_fail
+#
+# State-transition logic appears outside transitions.yaml.
+# SPLIT into two subsystems to avoid mixed-context false positives:
+#   - code_targets: compiled/interpreted source files
+#   - docs_targets: Markdown documentation
+# ---------------------------------------------------------------------------
+type_b_logic_duplication:
+  description: "State machine logic outside transitions.yaml"
+  severity: hard_fail
+
+  code_targets:
+    extensions:
+      - "*.rs"
+      - "*.ts"
+      - "*.py"
+      - "*.sh"
+    forbidden_patterns:
+      - "if.*status"
+      - "match.*TASK_"
+      - "switch.*TASK_"
+
+  docs_targets:
+    extensions:
+      - "*.md"
+    forbidden_patterns:
+      - "if .* APPROVED"
+      - "workflow decides"
+
+  exclude_paths:
+    - ".task-locks/transitions.yaml"
+    - ".github/workflows/drift-detector.yml"
+    - "target/"
+
+# ---------------------------------------------------------------------------
+# TYPE C — Spec Drift
+# Severity: warning (non-blocking)
+#
+# A document describes system behaviour authoritatively, acting as a shadow
+# specification outside the declared truth sources.
+#
+# ESCALATION: When Type C fires, a GitHub issue is created with label
+# "architecture-drift" so it cannot be silently accumulated.
+# This prevents documentation from slowly becoming a second authority.
+# ---------------------------------------------------------------------------
+type_c_spec_drift:
+  description: "Documents acting as shadow specifications"
+  severity: warning
+
+  patterns:
+    - "source of truth"
+    - "CI decides"
+    - "workflow is"
+    - "defines the workflow"
+    - "state machine"
+    - "how the system works internally"
+    - "task assignment is"
+
+  file_extensions:
+    - "*.md"
+
+  exclude_paths:
+
+  escalation:
+    create_issue: true
+    label: "architecture-drift"
+
+# ---------------------------------------------------------------------------
+# TYPE D — Shadow System (Rule-Combination Detector)
+# Severity: hard_fail
+#
+# Detects files that implicitly form a second system of truth by combining
+# multiple forbidden behaviors from independent rule classes.
+#
+# A file is DRIFT if it matches patterns from >= threshold rule classes.
+# The detector is purely mechanical: grep per class, count, compare, exit.
+#
+# Rule classes are independent behavioral categories.
+# This is NOT semantic interpretation — it is pattern counting.
+# The workflow MUST NOT build an internal world model from these results.
+#
+# Scope: *.md, *.rs, *.ts, *.py
+# (YAML workflow files are CI consumers, not state stores — excluded via .github/)
+# ---------------------------------------------------------------------------
+type_d_shadow_system:
+  description: >
+    Detect files that implicitly form a second system of truth
+    by combining multiple forbidden behaviors.
+  severity: hard_fail
+  # FROZEN: do not add more rule_classes, do not combine class logic.
+  # The detector counts pattern presence per class. It does not interpret
+  # combinations or derive system behaviour from them. Extend only via RFC.
+
+  rule_classes:
+    state_store_signals:
+      - "status\\s*="
+      - "TASK_[A-Z_]+\\s*="
+      - "lock.*="
+      - "mutable.*state"
+    transition_logic_signals:
+      - "if.*->"
+      - "case.*TASK_"
+      - "match.*status"
+      - "transition.*"
+    event_override_signals:
+      - "write.*event"
+      - "TASK_[A-Z_]+_EVENT"
+      - "append.*jsonl"
+      - "event_index"
+
+  threshold:
+    min_hits: 2
+
+  scope:
+    extensions:
+      - "*.rs"
+      - "*.ts"
+      - "*.py"
+      # *.md is intentionally excluded from Type D scope.
+      # Documentation files that describe this system legitimately contain
+      # system vocabulary (event_index, transition.*) and produce false positives.
+      # A dedicated cross-file Markdown detector (Type E) will be added in a
+      # future iteration. Type C already provides coverage for spec drift in docs.
+
+  exclude_paths:
+    - ".task-locks/"
+    - ".github/"
+    - ".agents/"
+    - "target/"
+
+# ---------------------------------------------------------------------------
+# TYPE E — Markdown Authority
+# Severity: hard_fail
+#
+# CI workflows must not read Markdown task documents as operational input.
+# docs/TASKS.md is retired; task existence and current state are validated
+# exclusively against .task-locks/registry.json.
+# ---------------------------------------------------------------------------
+type_e_markdown_authority:
+  description: "Operational CI reads of documentation-only Markdown"
+  severity: hard_fail
+
+  scope:
+    extensions:
+      - "*.yml"
+      - "*.yaml"
+
+  forbidden_paths:
+    - "docs/TASKS.md"
+    - "TASKS.md"
+
+  exclude_paths:
+    - ".github/workflows/drift-detector.yml"
+
+# ---------------------------------------------------------------------------
+# AGENT DOCS LAYER
+#
+# Rules governing the .agents/ directory.
+# .agents/ is a read-only cognitive interface layer for AI agents.
+# It MUST NOT contain state, locks, transitions, or truth.
+#
+# These rules are enforced by Type D (pattern scanning) and Type A (filename).
+# This section documents the intent so the rules are grounded in policy.
+# ---------------------------------------------------------------------------
+agent_docs_layer:
+  description: "Constraints on .agents/ — read-only cognitive interface only"
+
+  allowed_paths:
+    - ".agents/**"
+    - "docs/**"
+
+  forbidden_behaviour:
+    - ".agents/** must not define state"
+    - ".agents/** must not define transitions"
+    - ".agents/** must not reference TASK_EVENTS as editable"
+    - ".agents/** must not contain JSON or YAML data files (exception: bootstrap.json read-order manifest)"
